@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3dSAGER Demo - Professional Pipeline Visualization</title>
+    <meta name="description" content="Professional demonstration of the 3dSAGER pipeline for 3D scene analysis and generation">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar">
+        <div class="container">
+            <div class="navbar-content">
+                <a href="/" class="logo">3dSAGER Demo</a>
+                <ul class="nav-links">
+                    <li><a href="#features">Features</a></li>
+                    <li><a href="#about">About</a></li>
+                    <li><a href="/demo" class="btn btn-primary">Try Demo</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container">
+            <div class="hero-content fade-in-up">
+                <h1>3dSAGER Pipeline</h1>
+                <p class="hero-subtitle">
+                    Geospatial Entity Resolution over 3D Objects
+                </p>
+                <p class="hero-description">
+                    Experience the cutting-edge capabilities of our 3dSAGER pipeline through this professional demonstration. 
+                    Explore sophisticated 3D geospatial entity resolution, coordinate-agnostic matching, and geometric analysis technologies.
+                </p>
+                <div class="hero-buttons">
+                    <a href="/demo" class="btn btn-primary">Launch Demo</a>
+                    <a href="#features" class="btn btn-secondary">Learn More</a>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Features Section -->
+    <section id="features" class="features">
+        <div class="container">
+            <h2 class="text-center mb-2">Pipeline Features</h2>
+            <div class="features-grid">
+                <div class="card feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3>Entity Resolution</h3>
+                    <p>Advanced 3D geospatial entity resolution using intrinsic geometric properties to identify matching spatial objects across different datasets.</p>
+                </div>
+                
+                <div class="card feature-card">
+                    <div class="feature-icon">🔧</div>
+                    <h3>Coordinate-Agnostic</h3>
+                    <p>Novel spatial-reference-independent featurization that enables robust comparison across datasets with incompatible coordinate systems.</p>
+                </div>
+                
+                <div class="card feature-card">
+                    <div class="feature-icon">📊</div>
+                    <h3>3D Mesh Analysis</h3>
+                    <p>Direct processing of polygon mesh representations from CityJson files, capturing intricate geometric characteristics for accurate matching.</p>
+                </div>
+                
+                <div class="card feature-card">
+                    <div class="feature-icon">⚡</div>
+                    <h3>BKAFI Blocking</h3>
+                    <p>Lightweight and interpretable blocking method that leverages feature importance scores to efficiently generate high-recall candidate sets.</p>
+                </div>
+                
+                <div class="card feature-card">
+                    <div class="feature-icon">🔬</div>
+                    <h3>Research Ready</h3>
+                    <p>Built for academic research with comprehensive evaluation on real-world urban datasets and publicly available code for reproducibility.</p>
+                </div>
+                
+                <div class="card feature-card">
+                    <div class="feature-icon">🌐</div>
+                    <h3>Urban Applications</h3>
+                    <p>Designed for urban planning, disaster management, and rapid response scenarios where accurate 3D object matching is critical.</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- About Section -->
+    <section id="about" class="about">
+        <div class="container">
+            <div class="card">
+                <h2 class="text-center mb-2">About 3dSAGER</h2>
+                <div class="about-content">
+                    <p>
+                        The 3dSAGER (3D Spatial-Aware Geospatial Entity Resolution) pipeline represents a breakthrough 
+                        in geospatial entity resolution for 3D objects. Our system combines novel geometric featurization 
+                        with coordinate-agnostic matching to deliver unprecedented accuracy in identifying matching spatial objects across different datasets.
+                    </p>
+                    <p>
+                        This demonstration showcases the core capabilities of our research pipeline, including 3D mesh analysis, 
+                        geometric property extraction, and BKAFI blocking. The system is designed to handle complex real-world urban 
+                        scenarios with high fidelity and computational efficiency, particularly in disaster management and urban planning.
+                    </p>
+                    <div class="tech-stack">
+                        <h3>Technology Stack</h3>
+                        <ul>
+                            <li><strong>Backend:</strong> Flask, Python, NumPy, Scientific Computing</li>
+                            <li><strong>3D Processing:</strong> Three.js, WebGL, CityJson mesh analysis</li>
+                            <li><strong>Machine Learning:</strong> XGBoost, Geometric feature extraction, BKAFI blocking</li>
+                            <li><strong>Web Framework:</strong> Flask, Modern JavaScript, Responsive Design</li>
+                            <li><strong>Visualization:</strong> Advanced 3D rendering, Real-time entity resolution</li>
+                            <li><strong>Performance:</strong> KDTree indexing, Efficient nearest neighbor search</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- CTA Section -->
+    <section class="cta">
+        <div class="container">
+            <div class="card text-center">
+                <h2>Ready to Explore?</h2>
+                <p class="mb-2">
+                    Experience the full capabilities of the 3dSAGER pipeline through our interactive demonstration.
+                </p>
+                <a href="/demo" class="btn btn-primary">Start Demo</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <div class="footer-content">
+                <p>&copy; 2024 3dSAGER Research Team. All rights reserved.</p>
+                <p>Built for academic research and demonstration purposes.</p>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3dSAGER Demo</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/demo.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- Three.js (Local) -->
+    <script src="{{ url_for('static', filename='js/threejs/three.min.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/threejs/OrbitControls.js') }}"></script>
+</head>
+<body>
+    <div class="demo-layout">
+        <!-- Sidebar -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <div class="header-top">
+                    <a href="/" class="back-btn">← Back to Home</a>
+                </div>
+                <h2>3dSAGER Pipeline</h2>
+            </div>
+            
+            <!-- File Selection -->
+            <div class="file-selection">
+                <h3>Select Data Source</h3>
+                <div class="source-tabs">
+                    <button class="tab-btn active" onclick="showSource('A')">Source A</button>
+                    <button class="tab-btn" onclick="showSource('B')">Source B</button>
+                </div>
+                
+                <div id="sourceA" class="source-content active">
+                    <div class="file-list" id="filesA">
+                        <div class="loading">Loading files...</div>
+                    </div>
+                </div>
+                
+                <div id="sourceB" class="source-content">
+                    <div class="file-list" id="filesB">
+                        <div class="loading">Loading files...</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Pipeline Steps -->
+            <div class="pipeline-steps">
+                <h3>3dSAGER Pipeline</h3>
+                <div class="step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h4>Geometric Featurization</h4>
+                        <p>Extract geometric features from 3D objects</p>
+                        <button class="step-btn" onclick="runStep(1)">Run Step</button>
+                    </div>
+                </div>
+                
+                <div class="step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h4>BKAFI Blocking</h4>
+                        <p>Generate candidate pairs using feature importance</p>
+                        <button class="step-btn" onclick="runStep(2)">Run Step</button>
+                    </div>
+                </div>
+                
+                <div class="step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h4>Entity Resolution</h4>
+                        <p>Match objects using ML model</p>
+                        <button class="step-btn" onclick="runStep(3)">Run Step</button>
+                    </div>
+                </div>
+                
+                <div class="step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h4>Results</h4>
+                        <p>View matched entities</p>
+                        <button class="step-btn" onclick="runStep(4)">View Results</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main Content -->
+        <div class="main-content">
+            <div class="viewer-container">
+                <div class="viewer-header">
+                    <h3>3D City Model Viewer</h3>
+                    <div class="viewer-controls">
+                        <button class="control-btn" onclick="resetCamera()">Reset</button>
+                        <button class="control-btn" onclick="toggleFullscreen()">Fullscreen</button>
+                    </div>
+                </div>
+                
+                <div id="viewer" class="viewer">
+                    <div class="placeholder">
+                        <div class="placeholder-icon">🏢</div>
+                        <p>Select a CityJSON file to view</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/cityjson-parser.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/cityjson-viewer.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/demo.js') }}"></script>
+</body>
+</html>
