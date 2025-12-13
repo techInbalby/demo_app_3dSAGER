@@ -591,6 +591,274 @@ def load_bkafi_results():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/building/single/<building_id>')
+def get_single_building(building_id):
+    """
+    Get a single building from a file as a minimal CityJSON
+    Query params: file (the file path containing the building)
+    """
+    try:
+        import re
+        file_path = request.args.get('file', '')
+        if not file_path:
+            return jsonify({'error': 'No file path provided'}), 400
+        
+        print(f"Extracting single building {building_id} from file {file_path}")
+        
+        # Find the file
+        file_name = Path(file_path).name
+        possible_paths = [
+            DATA_DIR / file_path,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source A' / file_name,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source B' / file_name,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceA' / file_name,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceB' / file_name,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / file_path,
+        ]
+        
+        if 'RawCitiesData' in file_path or 'The Hague' in file_path:
+            possible_paths.insert(0, DATA_DIR / file_path)
+        
+        found_path = None
+        for path in possible_paths:
+            if path and path.exists() and path.is_file():
+                found_path = path
+                break
+        
+        if not found_path:
+            return jsonify({'error': f'File not found: {file_path}'}), 404
+        
+        # Load the CityJSON file
+        with open(found_path, 'r', encoding='utf-8') as f:
+            city_json = json.load(f)
+        
+        # Extract numeric ID for matching
+        numeric_match = re.search(r'(\d{10,})', str(building_id))
+        numeric_id = numeric_match.group(1) if numeric_match else building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = str(numeric_id)
+        
+        # Find the building in CityObjects
+        target_building_id = None
+        target_building = None
+        
+        for obj_id, obj_data in city_json.get('CityObjects', {}).items():
+            # Try exact match
+            if obj_id == building_id or obj_id == numeric_id:
+                target_building_id = obj_id
+                target_building = obj_data
+                break
+            
+            # Try numeric match
+            obj_numeric_match = re.search(r'(\d{10,})', str(obj_id))
+            if obj_numeric_match:
+                obj_numeric = obj_numeric_match.group(1)
+                if obj_numeric == numeric_id:
+                    target_building_id = obj_id
+                    target_building = obj_data
+                    break
+        
+        if not target_building:
+            return jsonify({'error': f'Building {building_id} not found in file {file_path}'}), 404
+        
+        # Extract all vertex indices used by this building
+        vertex_indices = set()
+        
+        def collect_vertex_indices(geometry):
+            if geometry.get('type') == 'Solid' and geometry.get('boundaries'):
+                for shell in geometry['boundaries']:
+                    for face in shell:
+                        for ring in face:
+                            for vertex_idx in ring:
+                                if isinstance(vertex_idx, int) and vertex_idx >= 0:
+                                    vertex_indices.add(vertex_idx)
+            elif geometry.get('type') == 'MultiSurface' and geometry.get('boundaries'):
+                for surface in geometry['boundaries']:
+                    for ring in surface:
+                        for vertex_idx in ring:
+                            if isinstance(vertex_idx, int) and vertex_idx >= 0:
+                                vertex_indices.add(vertex_idx)
+        
+        geometries = target_building.get('geometry', [])
+        for geometry in geometries:
+            collect_vertex_indices(geometry)
+        
+        # Create a mapping from old indices to new indices
+        sorted_indices = sorted(vertex_indices)
+        index_mapping = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted_indices)}
+        
+        # Extract only the vertices we need
+        all_vertices = city_json.get('vertices', [])
+        new_vertices = [all_vertices[i] for i in sorted_indices if i < len(all_vertices)]
+        
+        # Update geometry to use new vertex indices
+        def remap_geometry(geometry):
+            new_geometry = geometry.copy()
+            if new_geometry.get('type') == 'Solid' and new_geometry.get('boundaries'):
+                new_geometry['boundaries'] = [
+                    [
+                        [
+                            [index_mapping.get(v_idx, v_idx) for v_idx in ring]
+                            for ring in face
+                        ]
+                        for face in shell
+                    ]
+                    for shell in new_geometry['boundaries']
+                ]
+            elif new_geometry.get('type') == 'MultiSurface' and new_geometry.get('boundaries'):
+                new_geometry['boundaries'] = [
+                    [
+                        [index_mapping.get(v_idx, v_idx) for v_idx in ring]
+                        for ring in surface
+                    ]
+                    for surface in new_geometry['boundaries']
+                ]
+            return new_geometry
+        
+        new_geometries = [remap_geometry(geom) for geom in geometries]
+        
+        # Create minimal CityJSON with only this building
+        minimal_cityjson = {
+            'type': 'CityJSON',
+            'version': city_json.get('version', '1.0'),
+            'CityObjects': {
+                target_building_id: {
+                    **target_building,
+                    'geometry': new_geometries
+                }
+            },
+            'vertices': new_vertices
+        }
+        
+        # Preserve metadata if available
+        if 'metadata' in city_json:
+            minimal_cityjson['metadata'] = city_json['metadata']
+        
+        # Preserve transform if available
+        if 'transform' in city_json:
+            minimal_cityjson['transform'] = city_json['transform']
+        
+        print(f"Created minimal CityJSON with 1 building and {len(new_vertices)} vertices")
+        return jsonify(minimal_cityjson)
+        
+    except Exception as e:
+        import traceback
+        print(f"Error extracting single building: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/building/find-file/<building_id>')
+def find_building_file(building_id):
+    """
+    Find which file contains a specific building ID
+    Searches through Source A and Source B files
+    """
+    try:
+        import re
+        # Extract numeric ID from building_id
+        numeric_match = re.search(r'(\d{10,})', str(building_id))
+        if numeric_match:
+            numeric_id = numeric_match.group(1)
+        else:
+            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = str(numeric_id)
+        
+        print(f"Searching for building {building_id} (numeric: {numeric_id}) in files...")
+        
+        # Get source paths (same logic as get_files)
+        source_a_paths = [
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source A',
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceA',
+            DATA_DIR / 'Source A',
+            DATA_DIR / 'SourceA',
+            DATA_DIR
+        ]
+        
+        source_b_paths = [
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source B',
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceB',
+            DATA_DIR / 'Source B',
+            DATA_DIR / 'SourceB',
+            DATA_DIR
+        ]
+        
+        # Find first existing path
+        source_a_path = None
+        for path in source_a_paths:
+            if path.exists():
+                source_a_path = path
+                break
+        
+        source_b_path = None
+        for path in source_b_paths:
+            if path.exists():
+                source_b_path = path
+                break
+        
+        # Search through files
+        def search_in_directory(directory, source_type):
+            if not directory or not directory.exists():
+                return None
+            
+            for file_path in directory.rglob('*.json'):
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        city_objects = data.get('CityObjects', {})
+                        
+                        # Check if building ID exists in this file
+                        for obj_id, obj_data in city_objects.items():
+                            # Try exact match
+                            if obj_id == building_id or obj_id == numeric_id:
+                                rel_path = file_path.relative_to(DATA_DIR)
+                                print(f"Found building {building_id} in {rel_path} (exact match)")
+                                return str(rel_path)
+                            
+                            # Try numeric match
+                            obj_numeric_match = re.search(r'(\d{10,})', str(obj_id))
+                            if obj_numeric_match:
+                                obj_numeric = obj_numeric_match.group(1)
+                                if obj_numeric == numeric_id:
+                                    rel_path = file_path.relative_to(DATA_DIR)
+                                    print(f"Found building {building_id} in {rel_path} (numeric match)")
+                                    return str(rel_path)
+                except Exception as e:
+                    print(f"Error reading file {file_path}: {e}")
+                    continue
+            
+            return None
+        
+        # Search in Source A first
+        file_path = search_in_directory(source_a_path, 'A')
+        if file_path:
+            return jsonify({
+                'building_id': building_id,
+                'file_path': file_path,
+                'source': 'A'
+            })
+        
+        # Search in Source B
+        file_path = search_in_directory(source_b_path, 'B')
+        if file_path:
+            return jsonify({
+                'building_id': building_id,
+                'file_path': file_path,
+                'source': 'B'
+            })
+        
+        # Not found
+        return jsonify({
+            'building_id': building_id,
+            'file_path': None,
+            'source': None,
+            'message': f'Building {building_id} not found in any file'
+        }), 404
+        
+    except Exception as e:
+        import traceback
+        print(f"Error finding building file: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/building/bkafi/<building_id>')
 def get_building_bkafi(building_id):
     """

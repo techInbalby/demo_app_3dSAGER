@@ -2,7 +2,7 @@
 // Converts CityJSON to Cesium entities with geospatial positioning
 
 class CesiumCityJSONViewer {
-    constructor(containerId) {
+    constructor(containerId, options = {}) {
         this.container = document.getElementById(containerId);
         this.viewer = null;
         this.cityObjects = {};
@@ -11,6 +11,7 @@ class CesiumCityJSONViewer {
         this.boundingBox = null; // Store bounding box for camera fitting
         this.crs = null; // Store coordinate reference system from metadata
         this.sourceCRS = null; // Source CRS from CityJSON metadata
+        this.isComparisonViewer = options.isComparisonViewer || false; // Lightweight mode for comparison
         
         // The Hague coordinates (default location)
         this.defaultLocation = {
@@ -46,21 +47,39 @@ class CesiumCityJSONViewer {
                 url: 'https://a.tile.openstreetmap.org/'
             });
             
-            this.viewer = new Cesium.Viewer(this.container, {
-            terrainProvider: new Cesium.EllipsoidTerrainProvider(), // Simple ellipsoid - no token needed
-            imageryProvider: osmImagery, // Use OpenStreetMap instead of Ion imagery
-            baseLayerPicker: false, // Disable to avoid Ion token requirement
-            vrButton: false,
-            geocoder: false, // Geocoder may also use Ion, disable if not needed
-            homeButton: true,
-            sceneModePicker: true,
-            navigationHelpButton: true,
-            animation: false,
-            timeline: false,
-            fullscreenButton: true,
-            infoBox: false, // Disable Cesium info box - using custom window instead
-            selectionIndicator: true // Show selection indicator
-            });
+            // For comparison viewers, use minimal features for faster loading
+            const viewerOptions = this.isComparisonViewer ? {
+                terrainProvider: new Cesium.EllipsoidTerrainProvider(),
+                imageryProvider: false, // No imagery for faster loading
+                baseLayerPicker: false,
+                vrButton: false,
+                geocoder: false,
+                homeButton: false,
+                sceneModePicker: false,
+                navigationHelpButton: false,
+                animation: false,
+                timeline: false,
+                fullscreenButton: false,
+                infoBox: false,
+                selectionIndicator: false,
+                shouldAnimate: false
+            } : {
+                terrainProvider: new Cesium.EllipsoidTerrainProvider(), // Simple ellipsoid - no token needed
+                imageryProvider: osmImagery, // Use OpenStreetMap instead of Ion imagery
+                baseLayerPicker: false, // Disable to avoid Ion token requirement
+                vrButton: false,
+                geocoder: false, // Geocoder may also use Ion, disable if not needed
+                homeButton: true,
+                sceneModePicker: true,
+                navigationHelpButton: true,
+                animation: false,
+                timeline: false,
+                fullscreenButton: true,
+                infoBox: false, // Disable Cesium info box - using custom window instead
+                selectionIndicator: true // Show selection indicator
+            };
+            
+            this.viewer = new Cesium.Viewer(this.container, viewerOptions);
             
             // Set background to white
             this.viewer.scene.backgroundColor = Cesium.Color.WHITE;
@@ -81,14 +100,24 @@ class CesiumCityJSONViewer {
                 }
             });
             
-            // Setup click handler for buildings
-            this.setupClickHandler();
+            // Setup click handler for buildings (only for main viewer, not comparison)
+            if (!this.isComparisonViewer) {
+                this.setupClickHandler();
+            }
             
             // Remove placeholder if exists
             this.clearPlaceholder();
             
+            // For comparison viewers, disable globe rendering for better performance
+            if (this.isComparisonViewer) {
+                this.viewer.scene.globe.show = false;
+                this.viewer.scene.skyBox.show = false;
+                this.viewer.scene.sun.show = false;
+                this.viewer.scene.moon.show = false;
+            }
+            
             this.isInitialized = true;
-            console.log('Cesium CityJSON Viewer initialized successfully');
+            console.log(`Cesium CityJSON Viewer initialized successfully (${this.isComparisonViewer ? 'comparison mode' : 'full mode'})`);
         } catch (error) {
             console.error('Error initializing Cesium viewer:', error);
             this.showError('Failed to initialize 3D viewer: ' + error.message);
@@ -285,6 +314,55 @@ class CesiumCityJSONViewer {
             const totalObjects = objectIds.length;
             let entityCount = 0;
             let processedCount = 0;
+            
+            // For comparison viewers with single building, render immediately (no batching needed)
+            if (this.isComparisonViewer && totalObjects === 1) {
+                console.log('Comparison viewer: rendering single building immediately');
+                const objectId = objectIds[0];
+                const cityObject = this.cityObjects[objectId];
+                const geometries = cityObject.geometry || [];
+                
+                console.log(`Comparison viewer: Building ID: ${objectId}, geometries: ${geometries.length}, vertices: ${vertices.length}`);
+                
+                if (geometries.length === 0) {
+                    console.error('Comparison viewer: No geometries found for building');
+                    return;
+                }
+                
+                geometries.forEach((geometry, geomIndex) => {
+                    console.log(`Comparison viewer: Processing geometry ${geomIndex + 1}/${geometries.length}, type: ${geometry.type}`);
+                    try {
+                        const entity = this.createBuildingEntity(
+                            objectId,
+                            cityObject,
+                            geometry,
+                            transformedVertices || vertices,
+                            null
+                        );
+                        if (entity) {
+                            entityCount++;
+                            console.log(`Comparison viewer: Successfully created entity ${entityCount} for ${objectId}`);
+                        } else {
+                            console.warn(`Comparison viewer: createBuildingEntity returned null for geometry ${geomIndex + 1}`);
+                        }
+                    } catch (entityError) {
+                        console.error(`Comparison viewer: Error creating entity for geometry ${geomIndex + 1}:`, entityError);
+                    }
+                });
+                
+                const totalTime = performance.now() - parseStartTime;
+                console.log(`Comparison viewer: Loaded ${totalObjects} city objects, ${entityCount} entities in ${(totalTime / 1000).toFixed(2)}s`);
+                console.log(`Comparison viewer: Building entities map size: ${this.buildingEntities.size}`);
+                console.log(`Comparison viewer: Building entities keys:`, Array.from(this.buildingEntities.keys()));
+                
+                if (entityCount === 0) {
+                    console.error('Comparison viewer: WARNING - No entities were created!');
+                }
+                
+                return; // Done - entities are created synchronously
+            }
+            
+            // For regular viewers with multiple buildings, use batching
             // Increased batch size for better performance (200-300 is optimal for most cases)
             // Adjust based on file size: larger files = larger batches
             const batchSize = Math.min(300, Math.max(100, Math.floor(totalObjects / 20)));
@@ -335,17 +413,24 @@ class CesiumCityJSONViewer {
                     // All done
                     const totalTime = performance.now() - parseStartTime;
                     console.log(`Loaded ${totalObjects} city objects, ${entityCount} entities in ${(totalTime / 1000).toFixed(2)}s`);
-                    this.updateLoadingProgress('Finalizing...');
+                    console.log(`Building entities map size: ${this.buildingEntities.size}`);
                     
-                    // Fit camera to all buildings
-                    if (entityCount > 0) {
+                    // For comparison viewers, don't show loading/hide it immediately
+                    if (!this.isComparisonViewer) {
+                        this.updateLoadingProgress('Finalizing...');
+                    }
+                    
+                    // Fit camera to all buildings (unless auto-fit is disabled for comparison viewers)
+                    if (entityCount > 0 && !this.skipAutoFit) {
                         this.fitCameraToBuildings();
                     }
                     
-                    // Small delay before hiding loading to show completion
-                    setTimeout(() => {
-                        this.hideLoading();
-                    }, 500);
+                    // Small delay before hiding loading to show completion (only for main viewer)
+                    if (!this.isComparisonViewer) {
+                        setTimeout(() => {
+                            this.hideLoading();
+                        }, 500);
+                    }
                 }
             };
             
@@ -544,58 +629,65 @@ class CesiumCityJSONViewer {
     }
     
     createBuildingEntity(objectId, cityObject, geometry, vertices, transform) {
-        // If vertices are already transformed, transform is null
-        // Otherwise, use the provided transform
-        const useTransform = transform !== null;
-        
-        // Calculate building's own bounding box from its geometry
-        const buildingBbox = this.calculateBuildingBoundingBox(geometry, vertices, useTransform ? transform : null);
-        
-        if (!buildingBbox) {
-            console.warn(`Skipping entity ${objectId}: could not calculate bounding box`);
+        try {
+            // If vertices are already transformed, transform is null
+            // Otherwise, use the provided transform
+            const useTransform = transform !== null;
+            
+            // Calculate building's own bounding box from its geometry
+            const buildingBbox = this.calculateBuildingBoundingBox(geometry, vertices, useTransform ? transform : null);
+            
+            if (!buildingBbox) {
+                console.warn(`Skipping entity ${objectId}: could not calculate bounding box`);
+                return null;
+            }
+            
+            // Convert CityJSON geometry to Cesium positions (footprint at ground level)
+            const positions = this.convertGeometryToPositions(geometry, vertices, useTransform ? transform : null, buildingBbox.min.z);
+            
+            if (!positions || positions.length < 3) {
+                console.warn(`Skipping entity ${objectId}: insufficient positions (got ${positions ? positions.length : 0})`);
+                return null;
+            }
+            
+            // Get building height from its own bounding box
+            const height = buildingBbox.max.z - buildingBbox.min.z;
+            
+            if (height <= 0) {
+                console.warn(`Skipping entity ${objectId}: invalid height ${height}`);
+                return null;
+            }
+            
+            // Create Cesium entity
+            // Let Cesium auto-generate unique IDs to avoid duplicate ID errors
+            const entity = this.viewer.entities.add({
+                name: cityObject.attributes?.name || objectId,
+                buildingId: objectId,
+                polygon: {
+                    hierarchy: positions,
+                    extrudedHeight: height,
+                    height: 0, // Base at ground level
+                    material: this.getMaterialForObjectType(cityObject.type),
+                    outline: true,
+                    outlineColor: Cesium.Color.BLACK.withAlpha(0.3),
+                    outlineWidth: 1
+                },
+                description: this.createBuildingDescription(cityObject)
+            });
+            
+            // Store entity for click handling
+            if (!this.buildingEntities.has(objectId)) {
+                this.buildingEntities.set(objectId, []);
+            }
+            this.buildingEntities.get(objectId).push(entity);
+            
+            console.log(`Successfully created entity for ${objectId}, height: ${height.toFixed(2)}m, positions: ${positions.length}`);
+            return entity;
+        } catch (error) {
+            console.error(`Error in createBuildingEntity for ${objectId}:`, error);
+            console.error('Error stack:', error.stack);
             return null;
         }
-        
-        // Convert CityJSON geometry to Cesium positions (footprint at ground level)
-        const positions = this.convertGeometryToPositions(geometry, vertices, useTransform ? transform : null, buildingBbox.min.z);
-        
-        if (!positions || positions.length < 3) {
-            console.warn(`Skipping entity ${objectId}: insufficient positions`);
-            return null;
-        }
-        
-        // Get building height from its own bounding box
-        const height = buildingBbox.max.z - buildingBbox.min.z;
-        
-        if (height <= 0) {
-            console.warn(`Skipping entity ${objectId}: invalid height ${height}`);
-            return null;
-        }
-        
-        // Create Cesium entity
-        // Let Cesium auto-generate unique IDs to avoid duplicate ID errors
-        const entity = this.viewer.entities.add({
-            name: cityObject.attributes?.name || objectId,
-            buildingId: objectId,
-            polygon: {
-                hierarchy: positions,
-                extrudedHeight: height,
-                height: 0, // Base at ground level
-                material: this.getMaterialForObjectType(cityObject.type),
-                outline: true,
-                outlineColor: Cesium.Color.BLACK.withAlpha(0.3),
-                outlineWidth: 1
-            },
-            description: this.createBuildingDescription(cityObject)
-        });
-        
-        // Store entity for click handling
-        if (!this.buildingEntities.has(objectId)) {
-            this.buildingEntities.set(objectId, []);
-        }
-        this.buildingEntities.get(objectId).push(entity);
-        
-        return entity;
     }
     
     calculateBuildingBoundingBox(geometry, vertices, transform) {

@@ -16,6 +16,18 @@
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
     <!-- Note: No Cesium Ion token needed - we're using ellipsoid terrain instead of world terrain -->
     <!-- This works perfectly for displaying CityJSON building models -->
+    
+    <!-- Three.js for lightweight comparison viewers -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls as ES6 module (newer Three.js versions) -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
+        }
+    }
+    </script>
 </head>
 <body>
     <div class="demo-layout">
@@ -149,10 +161,38 @@
         </div>
     </div>
 
+    <!-- BKAFI Comparison Window -->
+    <div id="bkafi-comparison-window" class="comparison-window" style="display: none;">
+        <div class="comparison-header">
+            <h3>BKAFI Pairs Comparison</h3>
+            <button class="close-btn" onclick="closeBkafiComparisonWindow()">×</button>
+        </div>
+        <div class="comparison-content">
+            <div class="comparison-layout">
+                <!-- Left side: Candidate building -->
+                <div class="comparison-viewer-container">
+                    <div class="viewer-label">Candidate Building</div>
+                    <div id="comparison-viewer-candidate" class="comparison-viewer"></div>
+                    <div class="viewer-building-id" id="comparison-candidate-id">Loading...</div>
+                </div>
+                
+                <!-- Right side: BKAFI pairs (stacked vertically) -->
+                <div class="comparison-pairs-container">
+                    <div class="viewer-label">BKAFI Pairs</div>
+                    <div id="comparison-pairs-viewers" class="comparison-pairs-viewers">
+                        <!-- Pair viewers will be added here dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Leaflet JS for location map -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <!-- Cesium CityJSON Viewer -->
     <script src="{{ url_for('static', filename='js/cesium-cityjson-viewer.js') }}"></script>
+    <!-- Three.js Building Viewer for comparison windows -->
+    <script src="{{ url_for('static', filename='js/three-building-viewer.js') }}"></script>
     <script src="{{ url_for('static', filename='js/demo.js') }}"></script>
 </body>
 </html>

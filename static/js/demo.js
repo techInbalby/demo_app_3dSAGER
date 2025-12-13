@@ -580,8 +580,16 @@ function showGeometricFeatures(features) {
         featuresContainer.appendChild(propItem);
     });
     
-    // Insert at the beginning (newest content at top)
-    propsListEl.insertBefore(featuresContainer, propsListEl.firstChild);
+    // Insert geometric features AFTER BKAFI section if it exists, otherwise at the beginning
+    // This ensures BKAFI pairs always appear above geometric features
+    const existingBkafiSection = propsListEl.querySelector('.bkafi-pairs-section');
+    if (existingBkafiSection) {
+        // Insert after BKAFI section
+        existingBkafiSection.parentNode.insertBefore(featuresContainer, existingBkafiSection.nextSibling);
+    } else {
+        // Insert at the beginning if no BKAFI section
+        propsListEl.insertBefore(featuresContainer, propsListEl.firstChild);
+    }
     
     // Disable and update button text
     if (calcBtn) {
@@ -702,8 +710,8 @@ function loadBuildingBkafiPairs(buildingId) {
             // Cache the pairs
             buildingBkafiCache[buildingId] = data.pairs;
             
-            // Show pairs in properties window
-            showBkafiPairs(data.pairs);
+            // Show pairs in properties window - pass the buildingId explicitly
+            showBkafiPairs(data.pairs, buildingId);
         })
         .catch(error => {
             console.error('Error loading BKAFI pairs:', error);
@@ -711,9 +719,17 @@ function loadBuildingBkafiPairs(buildingId) {
 }
 
 // Show BKAFI pairs in properties window
-function showBkafiPairs(pairs) {
+function showBkafiPairs(pairs, buildingId = null) {
+    // Use provided buildingId or fall back to selectedBuildingId
+    const currentBuildingId = buildingId || selectedBuildingId;
+    
     const propsListEl = document.getElementById('properties-list');
     if (!propsListEl || !pairs || pairs.length === 0) return;
+    
+    if (!currentBuildingId) {
+        console.error('Cannot show BKAFI pairs: no building ID available');
+        return;
+    }
     
     // Remove existing BKAFI section if it exists
     const existingBkafiSection = propsListEl.querySelector('.bkafi-pairs-section');
@@ -724,6 +740,10 @@ function showBkafiPairs(pairs) {
     // Create container for BKAFI pairs
     const bkafiContainer = document.createElement('div');
     bkafiContainer.className = 'bkafi-pairs-section';
+    
+    // Store the building ID and pairs in data attributes for the button
+    bkafiContainer.setAttribute('data-building-id', currentBuildingId);
+    bkafiContainer.setAttribute('data-pairs', JSON.stringify(pairs));
     
     // Add separator and heading
     const separator = document.createElement('div');
@@ -752,8 +772,367 @@ function showBkafiPairs(pairs) {
         bkafiContainer.appendChild(pairItem);
     });
     
-    // Insert at the beginning (newest content at top)
+    // Add button to view pairs visually - use the building ID and pairs from this specific section
+    const viewButton = document.createElement('button');
+    viewButton.className = 'action-btn';
+    viewButton.style.marginTop = '15px';
+    viewButton.style.width = '100%';
+    viewButton.textContent = 'View Pairs Visually';
+    viewButton.onclick = () => {
+        // Get the building ID and pairs from the container's data attributes
+        const containerBuildingId = bkafiContainer.getAttribute('data-building-id');
+        const containerPairs = JSON.parse(bkafiContainer.getAttribute('data-pairs'));
+        console.log('View button clicked for building:', containerBuildingId, 'with', containerPairs.length, 'pairs');
+        openBkafiComparisonWindow(containerBuildingId, containerPairs);
+    };
+    bkafiContainer.appendChild(viewButton);
+    
+    // Always insert BKAFI pairs at the very beginning (top of properties window)
+    // This ensures BKAFI pairs always appear above geometric features
     propsListEl.insertBefore(bkafiContainer, propsListEl.firstChild);
+    
+    // If geometric features section exists, move it after BKAFI section
+    const existingFeaturesSection = propsListEl.querySelector('.geometric-features-section');
+    if (existingFeaturesSection && existingFeaturesSection !== bkafiContainer.nextSibling) {
+        // Remove and re-insert after BKAFI section
+        existingFeaturesSection.parentNode.removeChild(existingFeaturesSection);
+        bkafiContainer.parentNode.insertBefore(existingFeaturesSection, bkafiContainer.nextSibling);
+    }
+}
+
+// Open BKAFI comparison window
+function openBkafiComparisonWindow(candidateBuildingId, pairs) {
+    console.log('Opening BKAFI comparison window for building:', candidateBuildingId, 'with', pairs.length, 'pairs');
+    
+    const comparisonWindow = document.getElementById('bkafi-comparison-window');
+    if (!comparisonWindow) {
+        console.error('Comparison window not found');
+        return;
+    }
+    
+    // Show window
+    comparisonWindow.style.display = 'flex';
+    
+    // Add overlay
+    let overlay = document.getElementById('comparison-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'comparison-overlay';
+        overlay.className = 'comparison-overlay';
+        overlay.onclick = closeBkafiComparisonWindow;
+        document.body.appendChild(overlay);
+    }
+    overlay.classList.add('active');
+    
+    // Clear previous viewers
+    const candidateViewerEl = document.getElementById('comparison-viewer-candidate');
+    const pairsViewersEl = document.getElementById('comparison-pairs-viewers');
+    const candidateIdEl = document.getElementById('comparison-candidate-id');
+    
+    if (candidateViewerEl) candidateViewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Loading candidate building...</div>';
+    if (pairsViewersEl) pairsViewersEl.innerHTML = '';
+    if (candidateIdEl) candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
+    
+    // Load candidate building first, then pairs sequentially
+    const loadCandidate = () => {
+        if (selectedFile && currentSource === 'A') {
+            loadBuildingInComparisonViewer(candidateBuildingId, selectedFile, candidateViewerEl, candidateIdEl, 'candidate', () => {
+                // After candidate loads, start loading pairs
+                loadPairsSequentially(pairs.slice(0, 3), 0);
+            });
+        } else {
+            // Need to find which file contains this building
+            findAndLoadBuilding(candidateBuildingId, candidateViewerEl, candidateIdEl, 'candidate', () => {
+                // After candidate loads, start loading pairs
+                loadPairsSequentially(pairs.slice(0, 3), 0);
+            });
+        }
+    };
+    
+    // Create pair viewer containers first (so they're visible)
+    const pairsToShow = pairs.slice(0, 3);
+    pairsToShow.forEach((pair, index) => {
+        const pairViewerEl = document.createElement('div');
+        pairViewerEl.className = 'comparison-pair-item';
+        pairViewerEl.id = `comparison-pair-${index}`;
+        
+        const pairLabel = document.createElement('div');
+        pairLabel.className = 'comparison-pair-label';
+        pairLabel.textContent = `Pair ${index + 1}`;
+        pairViewerEl.appendChild(pairLabel);
+        
+        const pairViewer = document.createElement('div');
+        pairViewer.className = 'comparison-pair-viewer';
+        pairViewer.id = `comparison-viewer-pair-${index}`;
+        pairViewer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999; font-size: 12px;">Waiting to load...</div>';
+        pairViewerEl.appendChild(pairViewer);
+        
+        const pairIdEl = document.createElement('div');
+        pairIdEl.className = 'viewer-building-id';
+        pairIdEl.id = `comparison-pair-id-${index}`;
+        pairIdEl.textContent = `Index: ${pair.index_id}`;
+        pairViewerEl.appendChild(pairIdEl);
+        
+        if (pairsViewersEl) {
+            pairsViewersEl.appendChild(pairViewerEl);
+        }
+    });
+    
+    // Start loading candidate, then pairs will load sequentially
+    loadCandidate();
+}
+
+// Load pairs sequentially (one at a time) to avoid overwhelming the browser
+function loadPairsSequentially(pairs, currentIndex) {
+    if (currentIndex >= pairs.length) {
+        console.log('All pairs loaded');
+        return;
+    }
+    
+    const pair = pairs[currentIndex];
+    const pairViewer = document.getElementById(`comparison-viewer-pair-${currentIndex}`);
+    const pairIdEl = document.getElementById(`comparison-pair-id-${currentIndex}`);
+    
+    if (!pairViewer || !pairIdEl) {
+        console.error(`Pair viewer elements not found for index ${currentIndex}`);
+        // Continue with next pair
+        setTimeout(() => loadPairsSequentially(pairs, currentIndex + 1), 100);
+        return;
+    }
+    
+    console.log(`Loading pair ${currentIndex + 1}/${pairs.length}: ${pair.index_id}`);
+    
+    // Find and load the building, then load next pair
+    findAndLoadBuilding(pair.index_id, pairViewer, pairIdEl, `pair-${currentIndex}`, () => {
+        // After this pair loads, load the next one
+        setTimeout(() => {
+            loadPairsSequentially(pairs, currentIndex + 1);
+        }, 500); // Small delay between loads
+    });
+}
+
+// Find which file contains a building and load it
+function findAndLoadBuilding(buildingId, viewerEl, idEl, viewerType, onComplete) {
+    console.log(`Finding file for building ${buildingId} (${viewerType})`);
+    
+    if (viewerEl) {
+        viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666; font-size: 12px;">Finding building file...</div>';
+    }
+    
+    fetch(`/api/building/find-file/${encodeURIComponent(buildingId)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error || !data.file_path) {
+                console.error(`Error finding file for building ${buildingId}:`, data.error || data.message);
+                if (viewerEl) {
+                    viewerEl.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Building not found in any file</div>`;
+                }
+                if (onComplete) onComplete();
+                return;
+            }
+            
+            console.log(`Found building ${buildingId} in file ${data.file_path} (source: ${data.source})`);
+            loadBuildingInComparisonViewer(buildingId, data.file_path, viewerEl, idEl, viewerType, onComplete);
+        })
+        .catch(error => {
+            console.error(`Error finding file for building ${buildingId}:`, error);
+            if (viewerEl) {
+                viewerEl.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+            }
+            if (onComplete) onComplete();
+        });
+}
+
+// Load a single building in a comparison viewer (shows ONLY that building)
+function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, viewerType, onComplete) {
+    if (!viewerEl) return;
+    
+    console.log(`Loading ONLY building ${buildingId} from ${filePath} in ${viewerType} viewer`);
+    
+    // Create a unique container ID for this viewer
+    const containerId = `comparison-viewer-${viewerType}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    viewerEl.id = containerId;
+    // Don't clear innerHTML - we'll add loading message as a child element instead
+    // This prevents removing the Three.js canvas later
+    viewerEl.style.position = 'relative'; // Ensure positioning context for loading message
+    
+    // Store viewer reference
+    const viewerKey = `comparison-viewer-${viewerType}`;
+    
+    // Load ONLY the single building (minimal CityJSON with just this building)
+    fetch(`/api/building/single/${encodeURIComponent(buildingId)}?file=${encodeURIComponent(filePath)}`)
+        .then(response => {
+            if (!response.ok) {
+                return response.json().then(err => Promise.reject(new Error(err.error || `HTTP ${response.status}`)));
+            }
+            return response.json();
+        })
+        .then(minimalCityJSON => {
+            console.log(`Loaded minimal CityJSON with 1 building for ${buildingId}`);
+            
+            // Update loading message
+            viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Initializing viewer...</div>';
+            
+            // Use Three.js for comparison viewers (much faster and lighter)
+            viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Initializing viewer...</div>';
+            
+            // Check if Three.js is loaded - wait for it if needed
+            const checkThreeJS = (attempts = 0) => {
+                if (typeof THREE !== 'undefined') {
+                    initializeThreeViewer();
+                } else if (attempts < 50) {
+                    // Wait up to 5 seconds for Three.js to load
+                    setTimeout(() => checkThreeJS(attempts + 1), 100);
+                } else {
+                    console.error('Three.js library failed to load after 5 seconds!');
+                    viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #dc3545;">Three.js library not loaded. Please refresh the page.</div>';
+                    if (onComplete) onComplete();
+                }
+            };
+            
+            const initializeThreeViewer = () => {
+                setTimeout(() => {
+                try {
+                    console.log(`=== USING THREE.JS VIEWER (NOT CESIUM) ===`);
+                    console.log(`Creating Three.js viewer for ${buildingId} in container ${containerId}`);
+                    console.log(`Three.js available:`, typeof THREE !== 'undefined');
+                    console.log(`ThreeBuildingViewer available:`, typeof ThreeBuildingViewer !== 'undefined');
+                    
+                    // Create a loading message div that we can remove later WITHOUT clearing the container
+                    let loadingMsg = viewerEl.querySelector(`#loading-msg-${containerId}`);
+                    if (!loadingMsg) {
+                        loadingMsg = document.createElement('div');
+                        loadingMsg.id = `loading-msg-${containerId}`;
+                        loadingMsg.style.cssText = 'padding: 20px; text-align: center; color: #666; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10; background: rgba(255,255,255,0.9); border-radius: 4px;';
+                        loadingMsg.textContent = 'Initializing viewer...';
+                        viewerEl.appendChild(loadingMsg);
+                    }
+                    
+                    // Create Three.js viewer (lightweight, fast) - NOT Cesium!
+                    const viewer = new ThreeBuildingViewer(containerId);
+                    window[viewerKey] = viewer; // Store reference
+                    
+                    // Wait for viewer to initialize
+                    let attempts = 0;
+                    const maxAttempts = 30; // 3 seconds max
+                    const checkInitialized = setInterval(() => {
+                        attempts++;
+                        console.log(`Checking Three.js viewer initialization for ${buildingId}, attempt ${attempts}, initialized: ${viewer.isInitialized}`);
+                        
+                        if (viewer.isInitialized) {
+                            clearInterval(checkInitialized);
+                            
+                            console.log(`Three.js viewer initialized for ${buildingId}, loading building...`);
+                            
+                            // Find and update loading message (don't clear container - it has the canvas!)
+                            let loadingMsg = viewerEl.querySelector(`#loading-msg-${containerId}`);
+                            if (!loadingMsg) {
+                                loadingMsg = viewerEl.querySelector('div[style*="padding: 20px"]');
+                            }
+                            if (loadingMsg) {
+                                loadingMsg.textContent = 'Loading building...';
+                            }
+                            
+                            // Load the building
+                            try {
+                                console.log(`Calling loadBuilding for ${buildingId}`);
+                                viewer.loadBuilding(minimalCityJSON);
+                                
+                                // Wait a moment for rendering
+                                setTimeout(() => {
+                                    // Update ID display
+                                    if (idEl) {
+                                        idEl.textContent = `${viewerType === 'candidate' ? 'Candidate' : 'Index'}: ${buildingId}`;
+                                    }
+                                    
+                                    // Remove loading message (but keep the canvas!)
+                                    if (loadingMsg && loadingMsg.parentNode) {
+                                        loadingMsg.parentNode.removeChild(loadingMsg);
+                                    }
+                                    
+                                    console.log(`Successfully loaded building ${buildingId} in Three.js viewer`);
+                                    
+                                    // Call completion callback
+                                    if (onComplete) {
+                                        setTimeout(onComplete, 100);
+                                    }
+                                }, 500); // Increased delay to ensure building is rendered
+                            } catch (loadError) {
+                                console.error(`Error loading building in Three.js viewer:`, loadError);
+                                console.error('Error stack:', loadError.stack);
+                                if (loadingMsg) {
+                                    loadingMsg.textContent = `Error: ${loadError.message}`;
+                                    loadingMsg.style.color = '#dc3545';
+                                } else {
+                                    const errorDiv = document.createElement('div');
+                                    errorDiv.style.cssText = 'padding: 20px; text-align: center; color: #dc3545; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10;';
+                                    errorDiv.textContent = `Error: ${loadError.message}`;
+                                    viewerEl.appendChild(errorDiv);
+                                }
+                                if (onComplete) onComplete();
+                            }
+                        } else if (attempts >= maxAttempts) {
+                            clearInterval(checkInitialized);
+                            console.error(`Three.js viewer initialization timeout for ${containerId}`);
+                            let loadingMsg = viewerEl.querySelector(`#loading-msg-${containerId}`);
+                            if (loadingMsg) {
+                                loadingMsg.textContent = 'Viewer initialization timeout. Check console for errors.';
+                                loadingMsg.style.color = '#dc3545';
+                            } else {
+                                const errorDiv = document.createElement('div');
+                                errorDiv.style.cssText = 'padding: 20px; text-align: center; color: #dc3545; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10;';
+                                errorDiv.textContent = 'Viewer initialization timeout. Check console for errors.';
+                                viewerEl.appendChild(errorDiv);
+                            }
+                            if (onComplete) onComplete();
+                        }
+                    }, 100);
+                } catch (error) {
+                    console.error(`Error creating Three.js viewer for ${containerId}:`, error);
+                    console.error('Error stack:', error.stack);
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.cssText = 'padding: 20px; text-align: center; color: #dc3545; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10;';
+                    errorDiv.textContent = `Error: ${error.message}`;
+                    viewerEl.appendChild(errorDiv);
+                    if (onComplete) onComplete();
+                }
+            }, 100);
+            };
+            
+            // Start checking for Three.js
+            checkThreeJS();
+        })
+        .catch(error => {
+            console.error(`Error loading single building ${buildingId} from ${filePath}:`, error);
+            viewerEl.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+            if (onComplete) onComplete();
+        });
+}
+
+
+// Close BKAFI comparison window
+function closeBkafiComparisonWindow() {
+    const comparisonWindow = document.getElementById('bkafi-comparison-window');
+    const overlay = document.getElementById('comparison-overlay');
+    
+    if (comparisonWindow) {
+        comparisonWindow.style.display = 'none';
+    }
+    
+    if (overlay) {
+        overlay.classList.remove('active');
+    }
+    
+    // Clean up viewers (optional - they'll be recreated on next open)
+    const candidateViewerEl = document.getElementById('comparison-viewer-candidate');
+    const pairsViewersEl = document.getElementById('comparison-pairs-viewers');
+    
+    if (candidateViewerEl) {
+        candidateViewerEl.innerHTML = '';
+    }
+    if (pairsViewersEl) {
+        pairsViewersEl.innerHTML = '';
+    }
 }
 
 // View results (Step 3)
