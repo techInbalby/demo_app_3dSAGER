@@ -20,3 +20,6 @@ requests==2.31.0
 python-dotenv==1.0.0
 joblib==1.3.2
 
+# Compression for API responses
+Flask-Compress==1.14
+

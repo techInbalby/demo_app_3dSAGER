@@ -7,10 +7,14 @@ import os
 import json
 import re
 import pandas as pd
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, make_response
+from flask_compress import Compress
 from pathlib import Path
+import hashlib
 
 app = Flask(__name__)
+# Enable compression for all responses (gzip)
+Compress(app)
 
 # Configuration
 BASE_DIR = Path(__file__).parent
@@ -193,12 +197,30 @@ def get_file(file_path):
         # Read and return the JSON file
         # Data is now in the image, so no OneDrive file locking issues
         print(f"DEBUG: Reading file: {found_path}")
-        print(f"DEBUG: File size: {found_path.stat().st_size} bytes")
+        file_size = found_path.stat().st_size
+        print(f"DEBUG: File size: {file_size} bytes")
+        
+        # Calculate ETag for caching (based on file path and modification time)
+        mtime = found_path.stat().st_mtime
+        etag = hashlib.md5(f"{found_path}_{mtime}".encode()).hexdigest()
+        
+        # Check if client has cached version (If-None-Match header)
+        if_none_match = request.headers.get('If-None-Match')
+        if if_none_match == etag:
+            response = make_response('', 304)  # Not Modified
+            response.headers['ETag'] = etag
+            return response
         
         with open(found_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             print(f"DEBUG: Successfully loaded JSON, {len(data)} top-level keys")
-            return jsonify(data)
+            
+            # Create response with caching headers
+            response = jsonify(data)
+            response.headers['ETag'] = etag
+            response.headers['Cache-Control'] = 'public, max-age=3600'  # Cache for 1 hour
+            response.headers['Content-Type'] = 'application/json; charset=utf-8'
+            return response
             
     except json.JSONDecodeError as e:
         print(f"ERROR: JSON decode error: {e}")

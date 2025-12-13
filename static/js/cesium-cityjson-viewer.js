@@ -230,6 +230,17 @@ class CesiumCityJSONViewer {
             const vertices = cityJSON.vertices || [];
             const transform = cityJSON.transform || null;
             
+            // Pre-transform all vertices if transform is available (optimization)
+            // This avoids repeated transform calculations per building
+            let transformedVertices = null;
+            if (transform && vertices.length > 0) {
+                transformedVertices = vertices.map(vertex => [
+                    vertex[0] * transform.scale[0] + transform.translate[0],
+                    vertex[1] * transform.scale[1] + transform.translate[1],
+                    vertex[2] * transform.scale[2] + transform.translate[2]
+                ]);
+            }
+            
             console.log(`Parsing CityJSON: ${Object.keys(this.cityObjects).length} objects, ${vertices.length} vertices`);
             
             // Try to use metadata.geographicalExtent first (most accurate)
@@ -274,9 +285,20 @@ class CesiumCityJSONViewer {
             const totalObjects = objectIds.length;
             let entityCount = 0;
             let processedCount = 0;
-            const batchSize = 50; // Process 50 buildings at a time
+            // Increased batch size for better performance (200-300 is optimal for most cases)
+            // Adjust based on file size: larger files = larger batches
+            const batchSize = Math.min(300, Math.max(100, Math.floor(totalObjects / 20)));
             
             this.updateLoadingProgress(`Processing ${totalObjects} city objects...`);
+            
+            // Use requestIdleCallback if available, otherwise fall back to setTimeout
+            const scheduleNextBatch = (callback) => {
+                if (window.requestIdleCallback) {
+                    window.requestIdleCallback(callback, { timeout: 100 });
+                } else {
+                    setTimeout(callback, 0);
+                }
+            };
             
             const processBatch = (startIndex) => {
                 const endIndex = Math.min(startIndex + batchSize, totalObjects);
@@ -291,8 +313,8 @@ class CesiumCityJSONViewer {
                             objectId,
                             cityObject,
                             geometry,
-                            vertices,
-                            transform
+                            transformedVertices || vertices, // Use pre-transformed vertices if available
+                            null // No transform needed if vertices are pre-transformed
                         );
                         if (entity) {
                             entityCount++;
@@ -307,8 +329,8 @@ class CesiumCityJSONViewer {
                 
                 // Continue with next batch or finish
                 if (endIndex < totalObjects) {
-                    // Use setTimeout to allow UI to update
-                    setTimeout(() => processBatch(endIndex), 0);
+                    // Use requestIdleCallback for better scheduling
+                    scheduleNextBatch(() => processBatch(endIndex));
                 } else {
                     // All done
                     const totalTime = performance.now() - parseStartTime;
@@ -522,8 +544,12 @@ class CesiumCityJSONViewer {
     }
     
     createBuildingEntity(objectId, cityObject, geometry, vertices, transform) {
+        // If vertices are already transformed, transform is null
+        // Otherwise, use the provided transform
+        const useTransform = transform !== null;
+        
         // Calculate building's own bounding box from its geometry
-        const buildingBbox = this.calculateBuildingBoundingBox(geometry, vertices, transform);
+        const buildingBbox = this.calculateBuildingBoundingBox(geometry, vertices, useTransform ? transform : null);
         
         if (!buildingBbox) {
             console.warn(`Skipping entity ${objectId}: could not calculate bounding box`);
@@ -531,7 +557,7 @@ class CesiumCityJSONViewer {
         }
         
         // Convert CityJSON geometry to Cesium positions (footprint at ground level)
-        const positions = this.convertGeometryToPositions(geometry, vertices, transform, buildingBbox.min.z);
+        const positions = this.convertGeometryToPositions(geometry, vertices, useTransform ? transform : null, buildingBbox.min.z);
         
         if (!positions || positions.length < 3) {
             console.warn(`Skipping entity ${objectId}: insufficient positions`);
@@ -579,6 +605,8 @@ class CesiumCityJSONViewer {
         
         try {
             const processVertex = (vertex) => {
+                // If vertices are already transformed, transform is null
+                // Otherwise, apply transform
                 let [x, y, z] = vertex;
                 
                 if (transform) {
@@ -659,16 +687,8 @@ class CesiumCityJSONViewer {
                         // Convert vertex indices to Cesium positions
                         firstRing.forEach(vertexIdx => {
                             if (vertexIdx >= 0 && vertexIdx < vertices.length) {
-                                let vertex = vertices[vertexIdx];
-                                
-                                // Apply transform if available
-                                if (transform) {
-                                    vertex = [
-                                        vertex[0] * transform.scale[0] + transform.translate[0],
-                                        vertex[1] * transform.scale[1] + transform.translate[1],
-                                        vertex[2] * transform.scale[2] + transform.translate[2]
-                                    ];
-                                }
+                                // Vertices are already transformed if transform is null
+                                const vertex = vertices[vertexIdx];
                                 
                                 // Convert coordinates to WGS84 (lat/lon) for Cesium
                                 const coords = this.transformToWGS84(vertex[0], vertex[1]);
@@ -688,15 +708,8 @@ class CesiumCityJSONViewer {
                         
                         firstRing.forEach(vertexIdx => {
                             if (vertexIdx >= 0 && vertexIdx < vertices.length) {
-                                let vertex = vertices[vertexIdx];
-                                
-                                if (transform) {
-                                    vertex = [
-                                        vertex[0] * transform.scale[0] + transform.translate[0],
-                                        vertex[1] * transform.scale[1] + transform.translate[1],
-                                        vertex[2] * transform.scale[2] + transform.translate[2]
-                                    ];
-                                }
+                                // Vertices are already transformed if transform is null
+                                const vertex = vertices[vertexIdx];
                                 
                                 // Convert coordinates to WGS84 (lat/lon) for Cesium
                                 const coords = this.transformToWGS84(vertex[0], vertex[1]);
