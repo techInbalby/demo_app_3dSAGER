@@ -977,35 +977,61 @@ class CesiumCityJSONViewer {
                 return;
             }
             
-            // Batch update using requestAnimationFrame to avoid blocking UI
-            const BATCH_SIZE = 200; // Increased batch size for better performance
-            let index = 0;
+            // Update all materials synchronously - material updates are fast
+            // No need for batching since we're just setting properties
+            const updateStartTime = performance.now();
+            updates.forEach(({ entities, color }) => {
+                entities.forEach(entity => {
+                    if (entity.polygon) {
+                        entity.originalMaterial = color;
+                        entity.polygon.material = color;
+                    }
+                });
+            });
             
-            const updateBatch = () => {
-                const endIndex = Math.min(index + BATCH_SIZE, updates.length);
+            // Force Cesium to render immediately
+            if (this.viewer && this.viewer.scene) {
+                this.viewer.scene.requestRender();
                 
-                for (let i = index; i < endIndex; i++) {
-                    const { entities, color } = updates[i];
-                    entities.forEach(entity => {
-                        if (entity.polygon) {
-                            entity.originalMaterial = color;
-                            entity.polygon.material = color;
-                        }
-                    });
-                }
+                // Wait for Cesium's postRender event to know when rendering is complete
+                let renderCount = 0;
+                let resolved = false;
+                const maxRenders = 3; // Wait for 3 render cycles to ensure colors are visible
+                const maxWaitTime = 500; // Maximum 500ms wait as backup
                 
-                index = endIndex;
+                const resolveOnce = () => {
+                    if (!resolved) {
+                        resolved = true;
+                        const updateTime = performance.now() - updateStartTime;
+                        console.log(`Color updates applied in ${updateTime.toFixed(2)}ms`);
+                        resolve();
+                    }
+                };
                 
-                if (index < updates.length) {
-                    requestAnimationFrame(updateBatch);
-                } else {
-                    // All batches complete - resolve the promise
+                // Listen for postRender events
+                const postRenderHandler = () => {
+                    renderCount++;
+                    if (renderCount >= maxRenders) {
+                        this.viewer.scene.postRender.removeEventListener(postRenderHandler);
+                        resolveOnce();
+                    }
+                };
+                
+                this.viewer.scene.postRender.addEventListener(postRenderHandler);
+                
+                // Timeout as backup
+                setTimeout(() => {
+                    if (!resolved) {
+                        this.viewer.scene.postRender.removeEventListener(postRenderHandler);
+                        resolveOnce();
+                    }
+                }, maxWaitTime);
+            } else {
+                // Fallback if scene not available
+                setTimeout(() => {
                     resolve();
-                }
-            };
-            
-            // Start batch processing
-            requestAnimationFrame(updateBatch);
+                }, 100);
+            }
         });
     }
     
