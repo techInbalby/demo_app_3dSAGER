@@ -10,6 +10,8 @@
     <link href="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
     <!-- Leaflet CSS for location map -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Proj4js for coordinate transformation -->
+    <script src="https://cdn.jsdelivr.net/npm/proj4@2.9.0/dist/proj4.js"></script>
     <!-- Cesium JS -->
     <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
     <!-- Note: No Cesium Ion token needed - we're using ellipsoid terrain instead of world terrain -->
@@ -30,8 +32,8 @@
             <div class="file-selection">
                 <h3>Select Data Source</h3>
                 <div class="source-tabs">
-                    <button class="tab-btn active" onclick="showSource('A')">Source A</button>
-                    <button class="tab-btn" onclick="showSource('B')">Source B</button>
+                    <button class="tab-btn active" onclick="showSource('A')">Candidates</button>
+                    <button class="tab-btn" onclick="showSource('B')">Index</button>
                 </div>
                 
                 <div id="sourceA" class="source-content active">
@@ -56,39 +58,33 @@
             <!-- Pipeline Steps -->
             <div class="pipeline-steps">
                 <h3>3dSAGER Pipeline</h3>
-                <div class="step">
+                <div class="step" id="step-1">
                     <div class="step-number">1</div>
+                    <div class="step-status"></div>
                     <div class="step-content">
                         <h4>Geometric Featurization</h4>
-                        <p>Extract geometric features from 3D objects</p>
-                        <button class="step-btn" onclick="runStep(1)">Run Step</button>
+                        <p>Calculate geometric features for all buildings</p>
+                        <button class="step-btn" id="step-btn-1" onclick="calculateGeometricFeatures()" disabled>Calculate Features</button>
                     </div>
                 </div>
                 
-                <div class="step">
+                <div class="step" id="step-2">
                     <div class="step-number">2</div>
+                    <div class="step-status"></div>
                     <div class="step-content">
                         <h4>BKAFI Blocking</h4>
-                        <p>Generate candidate pairs using feature importance</p>
-                        <button class="step-btn" onclick="runStep(2)">Run Step</button>
+                        <p>Run BKAFI model to generate candidate pairs</p>
+                        <button class="step-btn" id="step-btn-2" onclick="runBKAFI()" disabled>Run BKAFI</button>
                     </div>
                 </div>
                 
-                <div class="step">
+                <div class="step" id="step-3">
                     <div class="step-number">3</div>
+                    <div class="step-status"></div>
                     <div class="step-content">
                         <h4>Entity Resolution</h4>
-                        <p>Match objects using ML model</p>
-                        <button class="step-btn" onclick="runStep(3)">Run Step</button>
-                    </div>
-                </div>
-                
-                <div class="step">
-                    <div class="step-number">4</div>
-                    <div class="step-content">
-                        <h4>Results</h4>
-                        <p>View matched entities</p>
-                        <button class="step-btn" onclick="runStep(4)">View Results</button>
+                        <p>View matching results</p>
+                        <button class="step-btn" id="step-btn-3" onclick="viewResults()" disabled>View Results</button>
                     </div>
                 </div>
             </div>
@@ -111,6 +107,27 @@
                         <p>Select a CityJSON file to view</p>
                     </div>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Building Properties Window -->
+    <div id="building-properties-window" class="properties-window" style="display: none;">
+        <div class="properties-header">
+            <h3>Building Properties</h3>
+            <button class="close-btn" onclick="closeBuildingProperties()">×</button>
+        </div>
+        <div class="properties-content">
+            <div class="building-info">
+                <h4 id="building-props-name" style="display: none;">Building Name</h4>
+                <p id="building-props-id">ID: -</p>
+            </div>
+            <div class="properties-actions">
+                <button class="action-btn" id="calc-features-btn" onclick="calculateGeometricFeatures()" disabled>Calculate Geometric Features</button>
+                <button class="action-btn" id="run-bkafi-btn" onclick="runBKAFI()" disabled style="display: none; margin-top: 10px;">Run BKAFI</button>
+            </div>
+            <div class="properties-list" id="properties-list">
+                <!-- Geometric features will be populated here after calculation -->
             </div>
         </div>
     </div>

@@ -2,12 +2,25 @@
 let currentSource = 'A';
 let currentSessionId = null;
 let locationMap = null;
+let selectedFile = null; // Store selected file path
+let selectedBuildingId = null; // Store selected building ID
+let selectedBuildingData = null; // Store selected building data
+let featuresLoaded = false; // Track if features have been calculated for current file
+let bkafiLoaded = false; // Track if BKAFI results have been loaded
+let buildingFeaturesCache = {}; // Cache features for all buildings
+let buildingBkafiCache = {}; // Cache BKAFI pairs for buildings
+let pipelineState = {
+    step1Completed: false, // Geometric Featurization
+    step2Completed: false, // BKAFI Blocking
+    step3Completed: false  // Entity Resolution
+};
 
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', function() {
     console.log('3dSAGER Demo initialized');
     loadDataFiles();
     initLocationMap();
+    updatePipelineUI(); // Initialize pipeline UI
 });
 
 // Load data files from API
@@ -58,6 +71,16 @@ function showSource(source) {
 function selectFile(filePath, source) {
     console.log('Selecting file:', filePath, source);
     
+    // Allow selecting from any source (Candidates or Index)
+    // Users can view files from both sources in any order
+    // Reset pipeline state and store file only if from Candidates (for pipeline steps)
+    if (source === 'A') {
+        resetPipelineState();
+        selectedFile = filePath; // Store selected file for pipeline steps
+        // Enable step 1 button when candidates file is selected
+        document.getElementById('step-btn-1').disabled = false;
+    }
+    
     // Call API to select file
     fetch('/api/data/select', {
         method: 'POST',
@@ -78,7 +101,25 @@ function selectFile(filePath, source) {
     });
 }
 
+// Reset pipeline state
+function resetPipelineState() {
+    pipelineState = {
+        step1Completed: false,
+        step2Completed: false,
+        step3Completed: false
+    };
+    selectedBuildingId = null;
+    selectedBuildingData = null;
+    featuresLoaded = false;
+    bkafiLoaded = false;
+    buildingFeaturesCache = {};
+    buildingBkafiCache = {};
+    updatePipelineUI();
+}
+
 // Initialize location map
+let cityPolygon = null; // Store the city polygon layer
+
 function initLocationMap() {
     // Wait for Leaflet to load
     if (typeof L === 'undefined') {
@@ -107,6 +148,89 @@ function initLocationMap() {
     }
 }
 
+// Update map with city bounds
+function updateMapWithCityBounds(bounds) {
+    if (!locationMap || !bounds) {
+        console.warn('Cannot update map: locationMap or bounds missing', { locationMap: !!locationMap, bounds });
+        return;
+    }
+    
+    // Validate bounds
+    if (!bounds.min || !bounds.max || 
+        typeof bounds.min.lat !== 'number' || typeof bounds.min.lon !== 'number' ||
+        typeof bounds.max.lat !== 'number' || typeof bounds.max.lon !== 'number') {
+        console.error('Invalid bounds format:', bounds);
+        return;
+    }
+    
+    // Validate coordinate ranges (lat: -90 to 90, lon: -180 to 180)
+    if (bounds.min.lat < -90 || bounds.max.lat > 90 || 
+        bounds.min.lon < -180 || bounds.max.lon > 180) {
+        console.error('Bounds out of valid range:', bounds);
+        return;
+    }
+    
+    // Check if bounds are reasonable (not all zeros or same point)
+    if (Math.abs(bounds.max.lat - bounds.min.lat) < 0.0001 || 
+        Math.abs(bounds.max.lon - bounds.min.lon) < 0.0001) {
+        console.warn('Bounds too small (likely a point, not an area):', bounds);
+    }
+    
+    try {
+        // Remove existing polygon if any
+        if (cityPolygon) {
+            locationMap.removeLayer(cityPolygon);
+            cityPolygon = null;
+        }
+        
+        console.log('Creating polygon with bounds:', {
+            min: { lat: bounds.min.lat, lon: bounds.min.lon },
+            max: { lat: bounds.max.lat, lon: bounds.max.lon },
+            center: bounds.center
+        });
+        
+        // Create rectangle polygon from bounds
+        const polygonBounds = [
+            [bounds.min.lat, bounds.min.lon], // Southwest corner
+            [bounds.min.lat, bounds.max.lon], // Southeast corner
+            [bounds.max.lat, bounds.max.lon], // Northeast corner
+            [bounds.max.lat, bounds.min.lon], // Northwest corner
+            [bounds.min.lat, bounds.min.lon]  // Close the polygon
+        ];
+        
+        // Create and add polygon
+        cityPolygon = L.polygon(polygonBounds, {
+            color: '#667eea',
+            fillColor: '#667eea',
+            fillOpacity: 0.3,
+            weight: 2
+        }).addTo(locationMap);
+        
+        // Fit map to show the polygon with some padding
+        locationMap.fitBounds(cityPolygon.getBounds(), {
+            padding: [20, 20], // Add padding around the bounds
+            maxZoom: 15 // Don't zoom in too much
+        });
+        
+        // Add popup to polygon with bounds info
+        const boundsInfo = `City Model Bounds<br>
+            Lat: ${bounds.min.lat.toFixed(6)} to ${bounds.max.lat.toFixed(6)}<br>
+            Lon: ${bounds.min.lon.toFixed(6)} to ${bounds.max.lon.toFixed(6)}`;
+        cityPolygon.bindPopup(boundsInfo).openPopup();
+        
+        console.log('Map updated successfully with city bounds');
+    } catch (error) {
+        console.error('Error updating map with city bounds:', error);
+        console.error('Bounds that caused error:', bounds);
+    }
+}
+
+// Map update callback disabled to improve performance
+// window.onCityJSONLoaded = function(bounds) {
+//     console.log('CityJSON loaded, updating map with bounds:', bounds);
+//     updateMapWithCityBounds(bounds);
+// };
+
 // Load file in 3D viewer
 function loadFileInViewer(filePath) {
     console.log('Loading file in viewer:', filePath);
@@ -116,10 +240,23 @@ function loadFileInViewer(filePath) {
     // Wait for viewer to be ready (with retry)
     const tryLoad = (attempts = 0) => {
         if (window.viewer && window.viewer.loadCityJSON) {
-            // Extract relative path for API
-            const relativePath = filePath.replace('data/RawCitiesData/The Hague/', '');
-            console.log('Using relative path:', relativePath);
-            window.viewer.loadCityJSON(relativePath);
+            // Use the file path as-is (it should already be in the correct format from the API)
+            // The path from the API is already relative to the data directory
+            console.log('Using file path:', filePath);
+            try {
+                window.viewer.loadCityJSON(filePath);
+            } catch (error) {
+                console.error('Error calling loadCityJSON:', error);
+                const viewer = document.getElementById('viewer');
+                if (viewer) {
+                    viewer.innerHTML = `
+                        <div class="placeholder">
+                            <div class="placeholder-icon">⚠️</div>
+                            <p>Error loading file: ${error.message}</p>
+                        </div>
+                    `;
+                }
+            }
             
             // Also try to fit camera after a delay
             setTimeout(() => {
@@ -156,19 +293,539 @@ function loadFileInViewer(filePath) {
     tryLoad();
 }
 
-// Pipeline step functions
-function runStep(stepNumber) {
-    console.log(`Running pipeline step ${stepNumber}`);
+// Show building properties window
+function showBuildingProperties(buildingId, cityObject) {
+    selectedBuildingId = buildingId;
+    selectedBuildingData = cityObject;
     
-    // Mock pipeline execution
-    const stepButtons = document.querySelectorAll('.step-btn');
-    stepButtons[stepNumber - 1].textContent = 'Running...';
-    stepButtons[stepNumber - 1].disabled = true;
+    const propsWindow = document.getElementById('building-properties-window');
+    const propsNameEl = document.getElementById('building-props-name');
+    const propsIdEl = document.getElementById('building-props-id');
+    const propsListEl = document.getElementById('properties-list');
+    const calcBtn = document.getElementById('calc-features-btn');
+    const bkafiBtn = document.getElementById('run-bkafi-btn');
     
-    setTimeout(() => {
-        stepButtons[stepNumber - 1].textContent = 'Completed';
-        stepButtons[stepNumber - 1].style.background = '#28a745';
-    }, 2000);
+    if (!propsWindow || !propsNameEl || !propsIdEl || !propsListEl) {
+        console.error('Building properties window elements not found');
+        return;
+    }
+    
+    // Show only the building ID (no name)
+    propsNameEl.textContent = '';
+    propsIdEl.textContent = `ID: ${buildingId}`;
+    
+    // Clear properties list
+    propsListEl.innerHTML = '';
+    
+    // Hide BKAFI button initially
+    if (bkafiBtn) {
+        bkafiBtn.style.display = 'none';
+    }
+    
+    // Enable calculate features button (only if a candidates file is selected)
+    // Pipeline steps only work with candidates files
+    // Check if we have a selected candidates file (source A)
+    const isCandidatesFile = selectedFile && currentSource === 'A';
+    
+    if (isCandidatesFile) {
+        if (featuresLoaded) {
+            // Features already calculated, load and show them
+            calcBtn.disabled = true;
+            calcBtn.textContent = 'Features Calculated';
+            calcBtn.style.background = '#28a745';
+            loadBuildingFeatures(buildingId);
+            
+            // Also load BKAFI pairs if BKAFI has been run
+            if (bkafiLoaded) {
+                loadBuildingBkafiPairs(buildingId);
+            }
+        } else {
+            // Features not calculated yet
+            calcBtn.disabled = false;
+            calcBtn.textContent = 'Calculate Geometric Features';
+            calcBtn.style.background = '#667eea'; // Reset button color
+        }
+    } else {
+        calcBtn.disabled = true;
+        if (currentSource === 'B') {
+            calcBtn.textContent = 'Select Candidates File for Pipeline';
+        } else {
+            calcBtn.textContent = 'Select Candidates File First';
+        }
+    }
+    
+    // Show the window
+    propsWindow.style.display = 'block';
+    
+    // Add overlay
+    let overlay = document.getElementById('properties-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'properties-overlay';
+        overlay.className = 'properties-overlay';
+        overlay.onclick = closeBuildingProperties;
+        document.body.appendChild(overlay);
+    }
+    overlay.classList.add('active');
+}
+
+// Close building properties window
+function closeBuildingProperties() {
+    const propsWindow = document.getElementById('building-properties-window');
+    const overlay = document.getElementById('properties-overlay');
+    
+    if (propsWindow) {
+        propsWindow.style.display = 'none';
+    }
+    
+    if (overlay) {
+        overlay.classList.remove('active');
+    }
+}
+
+// Calculate geometric features (Step 1) - for all buildings
+function calculateGeometricFeatures() {
+    if (!selectedFile) {
+        alert('Please select a candidates file first.');
+        return;
+    }
+    
+    // Can be called from sidebar button or building properties window
+    const stepBtn = document.getElementById('step-btn-1');
+    const calcBtn = document.getElementById('calc-features-btn');
+    
+    // Update button states
+    stepBtn.textContent = 'Loading...';
+    stepBtn.disabled = true;
+    if (calcBtn) {
+        calcBtn.textContent = 'Calculating...';
+        calcBtn.disabled = true;
+    }
+    
+    // Call API to calculate features for all buildings
+    fetch('/api/features/calculate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_path: selectedFile })
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error calculating features:', data.error);
+                alert('Error calculating geometric features: ' + data.error);
+                stepBtn.textContent = 'Calculate Features';
+                stepBtn.disabled = false;
+                if (calcBtn) {
+                    calcBtn.textContent = 'Calculate Geometric Features';
+                    calcBtn.disabled = false;
+                }
+                return;
+            }
+            
+            console.log('Features calculated:', data.message);
+            
+            // Mark step 1 as completed
+            pipelineState.step1Completed = true;
+            featuresLoaded = true;
+            updatePipelineUI();
+            
+            // Enable step 2
+            document.getElementById('step-btn-2').disabled = false;
+            
+            stepBtn.textContent = 'Completed';
+            stepBtn.style.background = '#28a745';
+            
+            // If building properties window is open, show features
+            if (selectedBuildingId) {
+                loadBuildingFeatures(selectedBuildingId);
+            }
+            
+            if (calcBtn) {
+                calcBtn.textContent = 'Features Calculated';
+                calcBtn.style.background = '#28a745';
+            }
+        })
+        .catch(error => {
+            console.error('Error calculating features:', error);
+            alert('Error calculating geometric features: ' + error.message);
+            stepBtn.textContent = 'Calculate Features';
+            stepBtn.disabled = false;
+            if (calcBtn) {
+                calcBtn.textContent = 'Calculate Geometric Features';
+                calcBtn.disabled = false;
+            }
+        });
+}
+
+// Load features for a specific building
+function loadBuildingFeatures(buildingId) {
+    if (!selectedFile) {
+        console.warn('Cannot load features: no file selected');
+        return;
+    }
+    
+    if (!featuresLoaded) {
+        console.warn('Features not yet calculated. Please run Step 1 first.');
+        return;
+    }
+    
+    console.log('Loading features for building:', buildingId);
+    
+    // Check cache first
+    if (buildingFeaturesCache[buildingId]) {
+        console.log('Using cached features for building:', buildingId);
+        showGeometricFeatures(buildingFeaturesCache[buildingId]);
+        return;
+    }
+    
+    // Load from API
+    console.log('Fetching features from API for building:', buildingId);
+    fetch(`/api/building/features/${buildingId}?file=${encodeURIComponent(selectedFile)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading features:', data.error);
+                const propsListEl = document.getElementById('properties-list');
+                if (propsListEl) {
+                    propsListEl.innerHTML = `<p style="color: red; padding: 20px;">Error loading features: ${data.error}</p>`;
+                }
+                return;
+            }
+            
+            // Check if building was found
+            if (data.found === false || !data.features || Object.keys(data.features).length === 0) {
+                console.warn('No features returned for building:', buildingId);
+                const propsListEl = document.getElementById('properties-list');
+                if (propsListEl) {
+                    const message = data.message || 'No features found for this building. This building may not be in the feature calculation dataset.';
+                    propsListEl.innerHTML = `<div style="padding: 20px; color: #666;">
+                        <p style="margin: 0 0 10px 0;">${message}</p>
+                        <p style="margin: 0; font-size: 12px; color: #999;">Building ID: ${buildingId}</p>
+                    </div>`;
+                }
+                return;
+            }
+            
+            console.log('Features loaded successfully:', Object.keys(data.features).length, 'features');
+            
+            // Cache the features
+            buildingFeaturesCache[buildingId] = data.features;
+            
+            // Show all features in properties window
+            showGeometricFeatures(data.features);
+        })
+        .catch(error => {
+            console.error('Error loading building features:', error);
+            const propsListEl = document.getElementById('properties-list');
+            if (propsListEl) {
+                propsListEl.innerHTML = `<p style="color: red; padding: 20px;">Error: ${error.message}</p>`;
+            }
+        });
+}
+
+// Show geometric features in properties window
+function showGeometricFeatures(features) {
+    const propsListEl = document.getElementById('properties-list');
+    const calcBtn = document.getElementById('calc-features-btn');
+    const bkafiBtn = document.getElementById('run-bkafi-btn');
+    if (!propsListEl || !features) {
+        console.warn('Cannot show features: propsListEl or features missing', { propsListEl: !!propsListEl, features: !!features });
+        return;
+    }
+    
+    console.log('Displaying features for building:', selectedBuildingId);
+    console.log('Number of features:', Object.keys(features).length);
+    console.log('Feature keys:', Object.keys(features));
+    
+    // Remove existing geometric features section if it exists
+    const existingFeaturesSection = propsListEl.querySelector('.geometric-features-section');
+    if (existingFeaturesSection) {
+        existingFeaturesSection.remove();
+    }
+    
+    // Create container for geometric features
+    const featuresContainer = document.createElement('div');
+    featuresContainer.className = 'geometric-features-section';
+    
+    // Add heading
+    const heading = document.createElement('div');
+    heading.className = 'property-separator';
+    const featureCount = Object.keys(features).length;
+    heading.innerHTML = `<h4 style="margin: 0 0 15px 0; color: #667eea; font-size: 16px;">Geometric Features (${featureCount})</h4>`;
+    featuresContainer.appendChild(heading);
+    
+    // Sort features alphabetically for better readability
+    const sortedKeys = Object.keys(features).sort();
+    
+    // Add all features from the joblib file
+    sortedKeys.forEach(key => {
+        const value = features[key];
+        const propItem = document.createElement('div');
+        propItem.className = 'property-item feature-item';
+        
+        // Format the value appropriately
+        let displayValue = value;
+        if (typeof value === 'number') {
+            displayValue = value.toFixed(4);
+        } else if (Array.isArray(value)) {
+            displayValue = `[${value.length} items]`;
+        } else if (typeof value === 'object' && value !== null) {
+            displayValue = JSON.stringify(value);
+        }
+        
+        propItem.innerHTML = `
+            <div class="property-key">${key}:</div>
+            <div class="property-value">${displayValue}</div>
+        `;
+        featuresContainer.appendChild(propItem);
+    });
+    
+    // Insert at the beginning (newest content at top)
+    propsListEl.insertBefore(featuresContainer, propsListEl.firstChild);
+    
+    // Disable and update button text
+    if (calcBtn) {
+        calcBtn.disabled = true;
+        calcBtn.textContent = 'Features Calculated';
+        calcBtn.style.background = '#28a745';
+    }
+    
+    // Show and enable BKAFI button if features exist and Step 1 is completed
+    if (bkafiBtn && featureCount > 0 && pipelineState.step1Completed) {
+        bkafiBtn.style.display = 'block';
+        if (!pipelineState.step2Completed) {
+            bkafiBtn.disabled = false;
+            bkafiBtn.textContent = 'Run BKAFI';
+            bkafiBtn.style.background = '#667eea';
+        } else {
+            bkafiBtn.disabled = true;
+            bkafiBtn.textContent = 'BKAFI Completed';
+            bkafiBtn.style.background = '#28a745';
+        }
+    }
+}
+
+// Run BKAFI (Step 2)
+function runBKAFI() {
+    if (!pipelineState.step1Completed) {
+        alert('Please complete Geometric Featurization first.');
+        return;
+    }
+    
+    console.log('Loading BKAFI results');
+    
+    const stepBtn = document.getElementById('step-btn-2');
+    stepBtn.textContent = 'Loading...';
+    stepBtn.disabled = true;
+    
+    // Call API to load BKAFI results from pkl file
+    fetch('/api/bkafi/load', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    })
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading BKAFI results:', data.error);
+                alert('Error loading BKAFI results: ' + data.error);
+                stepBtn.textContent = 'Run BKAFI';
+                stepBtn.disabled = false;
+                return;
+            }
+            
+            console.log('BKAFI results loaded:', data.message);
+            
+            // Mark step 2 as completed
+            pipelineState.step2Completed = true;
+            bkafiLoaded = true;
+            updatePipelineUI();
+            
+            // Enable step 3
+            document.getElementById('step-btn-3').disabled = false;
+            
+            stepBtn.textContent = 'Completed';
+            stepBtn.style.background = '#28a745';
+            
+            // Update BKAFI button in properties window if open
+            const bkafiBtn = document.getElementById('run-bkafi-btn');
+            if (bkafiBtn) {
+                bkafiBtn.disabled = true;
+                bkafiBtn.textContent = 'BKAFI Completed';
+                bkafiBtn.style.background = '#28a745';
+            }
+            
+            // If building properties window is open, load BKAFI pairs
+            if (selectedBuildingId) {
+                loadBuildingBkafiPairs(selectedBuildingId);
+            }
+        })
+        .catch(error => {
+            console.error('Error loading BKAFI results:', error);
+            alert('Error loading BKAFI results: ' + error.message);
+            stepBtn.textContent = 'Run BKAFI';
+            stepBtn.disabled = false;
+        });
+}
+
+// Load BKAFI pairs for a specific building
+function loadBuildingBkafiPairs(buildingId) {
+    if (!selectedFile) return;
+    
+    if (!bkafiLoaded) {
+        console.warn('BKAFI results not loaded yet');
+        return;
+    }
+    
+    // Check cache first
+    if (buildingBkafiCache[buildingId]) {
+        showBkafiPairs(buildingBkafiCache[buildingId]);
+        return;
+    }
+    
+    // Load from API
+    console.log('Fetching BKAFI pairs from API for building:', buildingId);
+    fetch(`/api/building/bkafi/${buildingId}?file=${encodeURIComponent(selectedFile)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading BKAFI pairs:', data.error);
+                return;
+            }
+            
+            if (!data.pairs || data.pairs.length === 0) {
+                console.warn('No BKAFI pairs returned for building:', buildingId);
+                return;
+            }
+            
+            console.log('BKAFI pairs loaded successfully:', data.pairs.length, 'pairs');
+            
+            // Cache the pairs
+            buildingBkafiCache[buildingId] = data.pairs;
+            
+            // Show pairs in properties window
+            showBkafiPairs(data.pairs);
+        })
+        .catch(error => {
+            console.error('Error loading BKAFI pairs:', error);
+        });
+}
+
+// Show BKAFI pairs in properties window
+function showBkafiPairs(pairs) {
+    const propsListEl = document.getElementById('properties-list');
+    if (!propsListEl || !pairs || pairs.length === 0) return;
+    
+    // Remove existing BKAFI section if it exists
+    const existingBkafiSection = propsListEl.querySelector('.bkafi-pairs-section');
+    if (existingBkafiSection) {
+        existingBkafiSection.remove();
+    }
+    
+    // Create container for BKAFI pairs
+    const bkafiContainer = document.createElement('div');
+    bkafiContainer.className = 'bkafi-pairs-section';
+    
+    // Add separator and heading
+    const separator = document.createElement('div');
+    separator.className = 'property-separator';
+    separator.innerHTML = `<h4 style="margin: 0 0 15px 0; color: #667eea; font-size: 16px;">BKAFI Pairs (${pairs.length})</h4>`;
+    bkafiContainer.appendChild(separator);
+    
+    // Add pairs (without prediction/true label - those will be shown after entity resolution)
+    pairs.forEach((pair, index) => {
+        const pairItem = document.createElement('div');
+        pairItem.className = 'property-item feature-item';
+        pairItem.style.background = '#f8f9fa';
+        pairItem.style.borderLeft = '4px solid #667eea';
+        pairItem.style.padding = '12px';
+        pairItem.style.marginBottom = '8px';
+        pairItem.style.borderRadius = '4px';
+        
+        pairItem.innerHTML = `
+            <div style="margin-bottom: 6px;">
+                <strong style="color: #333;">Pair ${index + 1}</strong>
+            </div>
+            <div style="font-size: 12px; color: #666;">
+                <div><strong>Index Building ID:</strong> ${pair.index_id}</div>
+            </div>
+        `;
+        bkafiContainer.appendChild(pairItem);
+    });
+    
+    // Insert at the beginning (newest content at top)
+    propsListEl.insertBefore(bkafiContainer, propsListEl.firstChild);
+}
+
+// View results (Step 3)
+function viewResults() {
+    if (!pipelineState.step2Completed) {
+        alert('Please complete BKAFI Blocking first.');
+        return;
+    }
+    
+    console.log('Viewing results for building:', selectedBuildingId);
+    
+    // Load matches and show in matches window
+    fetch(`/api/building/matches/${selectedBuildingId}?file=${encodeURIComponent(selectedFile)}`)
+        .then(response => response.json())
+        .then(data => {
+            if (data.error) {
+                console.error('Error loading matches:', data.error);
+                alert('Error loading matches: ' + data.error);
+                return;
+            }
+            
+            // Mark step 3 as completed
+            pipelineState.step3Completed = true;
+            updatePipelineUI();
+            
+            // Show matches window
+            showBuildingMatches(
+                selectedBuildingId,
+                selectedBuildingData?.attributes?.name || selectedBuildingId,
+                data.matches || []
+            );
+        })
+        .catch(error => {
+            console.error('Error loading matches:', error);
+            alert('Error loading matches: ' + error.message);
+        });
+}
+
+// Update pipeline UI with status indicators
+function updatePipelineUI() {
+    // Update step 1
+    const step1El = document.getElementById('step-1');
+    const step1Status = step1El.querySelector('.step-status');
+    if (pipelineState.step1Completed) {
+        step1Status.innerHTML = '✓';
+        step1Status.className = 'step-status completed';
+    } else {
+        step1Status.innerHTML = '';
+        step1Status.className = 'step-status';
+    }
+    
+    // Update step 2
+    const step2El = document.getElementById('step-2');
+    const step2Status = step2El.querySelector('.step-status');
+    if (pipelineState.step2Completed) {
+        step2Status.innerHTML = '✓';
+        step2Status.className = 'step-status completed';
+    } else {
+        step2Status.innerHTML = '';
+        step2Status.className = 'step-status';
+    }
+    
+    // Update step 3
+    const step3El = document.getElementById('step-3');
+    const step3Status = step3El.querySelector('.step-status');
+    if (pipelineState.step3Completed) {
+        step3Status.innerHTML = '✓';
+        step3Status.className = 'step-status completed';
+    } else {
+        step3Status.innerHTML = '';
+        step3Status.className = 'step-status';
+    }
 }
 
 // Viewer controls
@@ -274,3 +931,5 @@ function viewMatch(matchId) {
 window.showBuildingMatches = showBuildingMatches;
 window.closeMatchesWindow = closeMatchesWindow;
 window.viewMatch = viewMatch;
+window.showBuildingProperties = showBuildingProperties;
+window.closeBuildingProperties = closeBuildingProperties;

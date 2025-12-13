@@ -9,22 +9,14 @@ class CesiumCityJSONViewer {
         this.buildingEntities = new Map(); // Store building entities for click handling
         this.isInitialized = false;
         this.boundingBox = null; // Store bounding box for camera fitting
+        this.crs = null; // Store coordinate reference system from metadata
+        this.sourceCRS = null; // Source CRS from CityJSON metadata
         
         // The Hague coordinates (default location)
-        // NOTE: CityJSON files may use local coordinate systems
-        // Adjust these values based on your actual coordinate reference system (CRS)
-        // If your CityJSON uses a local CRS (e.g., RD New EPSG:28992), you'll need proper transformation
-        // For now, this assumes coordinates are relative to The Hague center
         this.defaultLocation = {
             longitude: 4.3007,  // The Hague longitude (WGS84)
             latitude: 52.0705,   // The Hague latitude (WGS84)
             height: 5000,       // Initial camera height
-            // Coordinate system origin (if using local coordinates)
-            originX: 0,         // Adjust if your CityJSON has a known origin
-            originY: 0,         // Adjust if your CityJSON has a known origin
-            // Scale factor for coordinate conversion (meters per degree)
-            // Approximate: 1 degree latitude ≈ 111,320 meters
-            metersPerDegree: 111320.0
         };
         
         this.init();
@@ -66,7 +58,7 @@ class CesiumCityJSONViewer {
             animation: false,
             timeline: false,
             fullscreenButton: true,
-            infoBox: true, // Enable info box for clicked buildings
+            infoBox: false, // Disable Cesium info box - using custom window instead
             selectionIndicator: true // Show selection indicator
             });
             
@@ -140,7 +132,7 @@ class CesiumCityJSONViewer {
     onBuildingClicked(buildingId, entity) {
         const cityObject = this.cityObjects[buildingId];
         
-        // Select the entity (shows info box)
+        // Select the entity (for highlighting)
         this.viewer.selectedEntity = entity;
         
         // Highlight the building temporarily
@@ -154,8 +146,10 @@ class CesiumCityJSONViewer {
             }
         }, 2000);
         
-        // Get matches for this building (call your API)
-        this.loadBuildingMatches(buildingId, cityObject);
+        // Show custom building properties window instead of Cesium info box
+        if (window.showBuildingProperties) {
+            window.showBuildingProperties(buildingId, cityObject);
+        }
     }
     
     loadBuildingMatches(buildingId, cityObject) {
@@ -201,64 +195,295 @@ class CesiumCityJSONViewer {
         
         // Fetch CityJSON
         const apiUrl = `/api/data/file/${encodeURIComponent(filePath)}`;
+        const fetchStartTime = performance.now();
+        
+        this.updateLoadingProgress('Downloading file...');
+        
         fetch(apiUrl)
             .then(response => {
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
+                const fetchTime = performance.now() - fetchStartTime;
+                console.log(`File download took: ${(fetchTime / 1000).toFixed(2)}s`);
+                this.updateLoadingProgress('Parsing JSON data...');
                 return response.json();
             })
             .then(data => {
+                const parseTime = performance.now() - fetchStartTime;
+                console.log(`JSON parsing took: ${(parseTime / 1000).toFixed(2)}s`);
+                console.log(`CityJSON data size: ${JSON.stringify(data).length} characters`);
                 this.parseCityJSON(data);
             })
             .catch(error => {
                 console.error('Error loading CityJSON:', error);
+                this.hideLoading();
                 this.showError('Failed to load CityJSON: ' + error.message);
             });
     }
     
     parseCityJSON(cityJSON) {
+        const parseStartTime = performance.now();
         try {
             // Store city objects
             this.cityObjects = cityJSON.CityObjects || {};
             const vertices = cityJSON.vertices || [];
             const transform = cityJSON.transform || null;
             
-            // Calculate bounding box for camera fitting
-            this.calculateBoundingBox(vertices, transform);
+            console.log(`Parsing CityJSON: ${Object.keys(this.cityObjects).length} objects, ${vertices.length} vertices`);
             
-            // Process each city object
-            let entityCount = 0;
-            Object.keys(this.cityObjects).forEach(objectId => {
-                const cityObject = this.cityObjects[objectId];
-                const geometries = cityObject.geometry || [];
-                
-                geometries.forEach(geometry => {
-                    const entity = this.createBuildingEntity(
-                        objectId,
-                        cityObject,
-                        geometry,
-                        vertices,
-                        transform
-                    );
-                    if (entity) {
-                        entityCount++;
+            // Try to use metadata.geographicalExtent first (most accurate)
+            // Format: [minx, miny, minz, maxx, maxy, maxz] in the file's CRS
+            if (cityJSON.metadata && cityJSON.metadata.geographicalExtent) {
+                const extent = cityJSON.metadata.geographicalExtent;
+                if (extent.length >= 6) {
+                    this.boundingBox = {
+                        min: { x: extent[0], y: extent[1], z: extent[2] },
+                        max: { x: extent[3], y: extent[4], z: extent[5] },
+                        center: {
+                            x: (extent[0] + extent[3]) / 2,
+                            y: (extent[1] + extent[4]) / 2,
+                            z: (extent[2] + extent[5]) / 2
+                        }
+                    };
+                    console.log('Using geographicalExtent from metadata:', this.boundingBox);
+                    // Store CRS info if available
+                    this.crs = cityJSON.metadata.referenceSystem || null;
+                    this.sourceCRS = this.crs;
+                    if (this.crs) {
+                        console.log('CityJSON CRS:', this.crs);
                     }
-                });
-            });
-            
-            // Fit camera to all buildings
-            if (entityCount > 0) {
-                this.fitCameraToBuildings();
+                }
             }
             
-            this.hideLoading();
-            console.log(`Loaded ${Object.keys(this.cityObjects).length} city objects, ${entityCount} entities`);
+            // Store CRS from metadata even if no geographicalExtent
+            if (!this.crs && cityJSON.metadata && cityJSON.metadata.referenceSystem) {
+                this.crs = cityJSON.metadata.referenceSystem;
+                this.sourceCRS = this.crs;
+                console.log('CityJSON CRS from metadata:', this.crs);
+            }
+            
+            // Fall back to calculating from vertices if no metadata
+            if (!this.boundingBox) {
+                this.calculateBoundingBox(vertices, transform);
+                console.log('Calculated bounding box from vertices:', this.boundingBox);
+            }
+            
+            // Process city objects in batches to avoid blocking UI
+            const objectIds = Object.keys(this.cityObjects);
+            const totalObjects = objectIds.length;
+            let entityCount = 0;
+            let processedCount = 0;
+            const batchSize = 50; // Process 50 buildings at a time
+            
+            this.updateLoadingProgress(`Processing ${totalObjects} city objects...`);
+            
+            const processBatch = (startIndex) => {
+                const endIndex = Math.min(startIndex + batchSize, totalObjects);
+                
+                for (let i = startIndex; i < endIndex; i++) {
+                    const objectId = objectIds[i];
+                    const cityObject = this.cityObjects[objectId];
+                    const geometries = cityObject.geometry || [];
+                    
+                    geometries.forEach(geometry => {
+                        const entity = this.createBuildingEntity(
+                            objectId,
+                            cityObject,
+                            geometry,
+                            vertices,
+                            transform
+                        );
+                        if (entity) {
+                            entityCount++;
+                        }
+                    });
+                    processedCount++;
+                }
+                
+                // Update progress
+                const progress = Math.round((processedCount / totalObjects) * 100);
+                this.updateLoadingProgress(`Processing buildings... ${progress}% (${processedCount}/${totalObjects})`);
+                
+                // Continue with next batch or finish
+                if (endIndex < totalObjects) {
+                    // Use setTimeout to allow UI to update
+                    setTimeout(() => processBatch(endIndex), 0);
+                } else {
+                    // All done
+                    const totalTime = performance.now() - parseStartTime;
+                    console.log(`Loaded ${totalObjects} city objects, ${entityCount} entities in ${(totalTime / 1000).toFixed(2)}s`);
+                    this.updateLoadingProgress('Finalizing...');
+                    
+                    // Fit camera to all buildings
+                    if (entityCount > 0) {
+                        this.fitCameraToBuildings();
+                    }
+                    
+                    // Small delay before hiding loading to show completion
+                    setTimeout(() => {
+                        this.hideLoading();
+                    }, 500);
+                }
+            };
+            
+            // Start processing buildings in batches
+            processBatch(0);
             
         } catch (error) {
             console.error('Error parsing CityJSON:', error);
             this.showError('Failed to parse CityJSON: ' + error.message);
         }
+    }
+    
+    calculateGeographicBoundsFromBuildings() {
+        // Use the geographic bounds we tracked while creating entities (most accurate)
+        // These are already in WGS84 since we converted them with fromDegrees
+        if (this.geographicBounds && 
+            this.geographicBounds.minLat !== Infinity && 
+            this.geographicBounds.minLon !== Infinity) {
+            
+            console.log('Using tracked geographic bounds from entity positions:', this.geographicBounds);
+            
+            return {
+                min: { 
+                    lat: this.geographicBounds.minLat, 
+                    lon: this.geographicBounds.minLon 
+                },
+                max: { 
+                    lat: this.geographicBounds.maxLat, 
+                    lon: this.geographicBounds.maxLon 
+                },
+                center: {
+                    lat: (this.geographicBounds.minLat + this.geographicBounds.maxLat) / 2,
+                    lon: (this.geographicBounds.minLon + this.geographicBounds.maxLon) / 2
+                }
+            };
+        }
+        
+        // Fallback to getGeographicBounds if tracking failed
+        console.log('Tracked bounds not available, using fallback method');
+        return this.getGeographicBounds();
+    }
+    
+    transformToWGS84(x, y) {
+        // Transform coordinates from source CRS to WGS84 (EPSG:4326)
+        console.log(`Transforming coordinates: x=${x}, y=${y}, sourceCRS=${this.sourceCRS}`);
+        
+        if (!this.sourceCRS) {
+            console.warn('No CRS specified, using approximation (may be inaccurate)');
+            // No CRS info, use approximation
+            const metersPerDegree = 111320.0;
+            const result = {
+                lon: this.defaultLocation.longitude + (x / metersPerDegree),
+                lat: this.defaultLocation.latitude + (y / metersPerDegree)
+            };
+            console.log(`Approximation result:`, result);
+            return result;
+        }
+        
+        // Check if already WGS84
+        if (this.sourceCRS.includes('4326') || this.sourceCRS.includes('WGS84')) {
+            console.log('Already in WGS84, using coordinates directly');
+            return { lon: x, lat: y };
+        }
+        
+        // Use proj4js for transformation
+        if (typeof proj4 !== 'undefined') {
+            try {
+                // Extract EPSG code from CRS string
+                // Handle formats like: "EPSG:28992", "urn:ogc:def:crs:EPSG::28992", "28992", etc.
+                let sourceEPSG = this.sourceCRS;
+                
+                // Extract EPSG number
+                const epsgMatch = this.sourceCRS.match(/(\d+)/);
+                if (epsgMatch) {
+                    const epsgCode = epsgMatch[1];
+                    sourceEPSG = `EPSG:${epsgCode}`;
+                } else if (!this.sourceCRS.includes('EPSG:')) {
+                    sourceEPSG = `EPSG:${this.sourceCRS}`;
+                }
+                
+                console.log(`Transforming from ${sourceEPSG} to EPSG:4326`);
+                
+                // Transform to WGS84
+                const [lon, lat] = proj4(sourceEPSG, 'EPSG:4326', [x, y]);
+                const result = { lon, lat };
+                console.log(`Transformation result:`, result);
+                return result;
+            } catch (error) {
+                console.error('Proj4 transformation failed:', error);
+                console.error('Source CRS:', this.sourceCRS, 'Coordinates:', { x, y });
+                // Fallback to approximation
+                const metersPerDegree = 111320.0;
+                return {
+                    lon: this.defaultLocation.longitude + (x / metersPerDegree),
+                    lat: this.defaultLocation.latitude + (y / metersPerDegree)
+                };
+            }
+        } else {
+            console.error('proj4js not loaded! Check if script is included in HTML.');
+            // Fallback to approximation
+            const metersPerDegree = 111320.0;
+            return {
+                lon: this.defaultLocation.longitude + (x / metersPerDegree),
+                lat: this.defaultLocation.latitude + (y / metersPerDegree)
+            };
+        }
+    }
+    
+    getGeographicBounds() {
+        // Convert bounding box to geographic coordinates (lat/lon)
+        if (!this.boundingBox) {
+            console.warn('No bounding box available for geographic bounds calculation');
+            return null;
+        }
+        
+        console.log('Calculating geographic bounds from bounding box:', this.boundingBox);
+        console.log('Source CRS:', this.sourceCRS);
+        
+        // Check if the bounding box is already in WGS84 (lat/lon)
+        if (this.sourceCRS && (this.sourceCRS.includes('4326') || this.sourceCRS.includes('WGS84'))) {
+            // Already in WGS84, just swap x/y to lon/lat
+            console.log('Bounding box already in WGS84');
+            return {
+                min: { lat: this.boundingBox.min.y, lon: this.boundingBox.min.x },
+                max: { lat: this.boundingBox.max.y, lon: this.boundingBox.max.x },
+                center: {
+                    lat: this.boundingBox.center.y,
+                    lon: this.boundingBox.center.x
+                }
+            };
+        }
+        
+        // Transform from source CRS to WGS84
+        // Transform all four corners to ensure we get the correct bounding box
+        const corners = [
+            { x: this.boundingBox.min.x, y: this.boundingBox.min.y }, // SW
+            { x: this.boundingBox.min.x, y: this.boundingBox.max.y }, // NW
+            { x: this.boundingBox.max.x, y: this.boundingBox.min.y }, // SE
+            { x: this.boundingBox.max.x, y: this.boundingBox.max.y }  // NE
+        ];
+        
+        const transformedCorners = corners.map(corner => this.transformToWGS84(corner.x, corner.y));
+        
+        // Find min/max from transformed corners
+        let minLat = Math.min(...transformedCorners.map(c => c.lat));
+        let maxLat = Math.max(...transformedCorners.map(c => c.lat));
+        let minLon = Math.min(...transformedCorners.map(c => c.lon));
+        let maxLon = Math.max(...transformedCorners.map(c => c.lon));
+        
+        const result = {
+            min: { lat: minLat, lon: minLon },
+            max: { lat: maxLat, lon: maxLon },
+            center: {
+                lat: (minLat + maxLat) / 2,
+                lon: (minLon + maxLon) / 2
+            }
+        };
+        
+        console.log('Transformed geographic bounds:', result);
+        return result;
     }
     
     calculateBoundingBox(vertices, transform) {
@@ -322,8 +547,8 @@ class CesiumCityJSONViewer {
         }
         
         // Create Cesium entity
+        // Let Cesium auto-generate unique IDs to avoid duplicate ID errors
         const entity = this.viewer.entities.add({
-            id: `building_${objectId}_${Date.now()}`,
             name: cityObject.attributes?.name || objectId,
             buildingId: objectId,
             polygon: {
@@ -445,16 +670,11 @@ class CesiumCityJSONViewer {
                                     ];
                                 }
                                 
-                                // Convert local coordinates to geodetic
-                                // Use baseHeight (minimum Z) for footprint, not the vertex Z
-                                const metersPerDegree = this.defaultLocation.metersPerDegree;
-                                const lon = this.defaultLocation.longitude + 
-                                    ((vertex[0] - this.defaultLocation.originX) / metersPerDegree);
-                                const lat = this.defaultLocation.latitude + 
-                                    ((vertex[1] - this.defaultLocation.originY) / metersPerDegree);
+                                // Convert coordinates to WGS84 (lat/lon) for Cesium
+                                const coords = this.transformToWGS84(vertex[0], vertex[1]);
                                 
                                 // Use baseHeight for footprint (ground level)
-                                positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight));
+                                positions.push(Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat, baseHeight));
                             }
                         });
                     }
@@ -478,14 +698,11 @@ class CesiumCityJSONViewer {
                                     ];
                                 }
                                 
-                                const metersPerDegree = this.defaultLocation.metersPerDegree;
-                                const lon = this.defaultLocation.longitude + 
-                                    ((vertex[0] - this.defaultLocation.originX) / metersPerDegree);
-                                const lat = this.defaultLocation.latitude + 
-                                    ((vertex[1] - this.defaultLocation.originY) / metersPerDegree);
+                                // Convert coordinates to WGS84 (lat/lon) for Cesium
+                                const coords = this.transformToWGS84(vertex[0], vertex[1]);
                                 
                                 // Use baseHeight for footprint (ground level)
-                                positions.push(Cesium.Cartesian3.fromDegrees(lon, lat, baseHeight));
+                                positions.push(Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat, baseHeight));
                             }
                         });
                     }
@@ -559,15 +776,14 @@ class CesiumCityJSONViewer {
             // Use bounding box if available
             if (this.boundingBox) {
                 const center = this.boundingBox.center;
-                const lon = this.defaultLocation.longitude + (center.x / 111320.0);
-                const lat = this.defaultLocation.latitude + (center.y / 111320.0);
+                const coords = this.transformToWGS84(center.x, center.y);
                 const height = Math.max(
                     Math.abs(this.boundingBox.max.x - this.boundingBox.min.x),
                     Math.abs(this.boundingBox.max.y - this.boundingBox.min.y)
                 ) * 1.5;
                 
                 this.viewer.camera.flyTo({
-                    destination: Cesium.Cartesian3.fromDegrees(lon, lat, height),
+                    destination: Cesium.Cartesian3.fromDegrees(coords.lon, coords.lat, height),
                     orientation: {
                         heading: Cesium.Math.toRadians(0),
                         pitch: Cesium.Math.toRadians(-90), // Top-down view
@@ -599,6 +815,8 @@ class CesiumCityJSONViewer {
         this.buildingEntities.clear();
         this.cityObjects = {};
         this.boundingBox = null;
+        this.crs = null;
+        this.sourceCRS = null;
     }
     
     clearPlaceholder() {
@@ -609,12 +827,46 @@ class CesiumCityJSONViewer {
     }
     
     showLoading() {
-        // Cesium handles loading internally, but we can add a custom message
         console.log('Loading CityJSON...');
+        // Show visual loading indicator
+        if (this.container) {
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = 'cesium-loading-indicator';
+            loadingDiv.style.cssText = `
+                position: absolute;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: rgba(0, 0, 0, 0.8);
+                color: white;
+                padding: 20px 30px;
+                border-radius: 8px;
+                z-index: 10000;
+                text-align: center;
+                font-family: Arial, sans-serif;
+            `;
+            loadingDiv.innerHTML = `
+                <div style="font-size: 16px; margin-bottom: 10px;">Loading CityJSON...</div>
+                <div id="cesium-loading-progress" style="font-size: 14px; color: #ccc;">Parsing data...</div>
+            `;
+            this.container.appendChild(loadingDiv);
+        }
+    }
+    
+    updateLoadingProgress(message) {
+        const progressEl = document.getElementById('cesium-loading-progress');
+        if (progressEl) {
+            progressEl.textContent = message;
+        }
     }
     
     hideLoading() {
         console.log('CityJSON loaded');
+        // Remove loading indicator
+        const loadingDiv = document.getElementById('cesium-loading-indicator');
+        if (loadingDiv) {
+            loadingDiv.remove();
+        }
     }
     
     showError(message) {
