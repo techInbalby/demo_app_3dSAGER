@@ -19,15 +19,8 @@
     
     <!-- Three.js for lightweight comparison viewers -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <!-- OrbitControls as ES6 module (newer Three.js versions) -->
-    <script type="importmap">
-    {
-        "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/"
-        }
-    }
-    </script>
+    <!-- OrbitControls for Three.js (allows camera rotation/panning/zooming) -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
 </head>
 <body>
     <div class="demo-layout">
@@ -169,7 +162,7 @@
         </div>
         <div class="comparison-content">
             <div class="comparison-layout">
-                <!-- Left side: Candidate building -->
+                <!-- Left side: Candidate building (centered vertically) -->
                 <div class="comparison-viewer-container">
                     <div class="viewer-label">Candidate Building</div>
                     <div id="comparison-viewer-candidate" class="comparison-viewer"></div>

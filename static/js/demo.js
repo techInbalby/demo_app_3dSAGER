@@ -810,7 +810,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         return;
     }
     
-    // Show window
+    // Show window first
     comparisonWindow.style.display = 'flex';
     
     // Add overlay
@@ -824,33 +824,112 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     }
     overlay.classList.add('active');
     
-    // Clear previous viewers
+    // Get viewer elements BEFORE cleanup (so we have references)
     const candidateViewerEl = document.getElementById('comparison-viewer-candidate');
     const pairsViewersEl = document.getElementById('comparison-pairs-viewers');
     const candidateIdEl = document.getElementById('comparison-candidate-id');
     
-    if (candidateViewerEl) candidateViewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Loading candidate building...</div>';
-    if (pairsViewersEl) pairsViewersEl.innerHTML = '';
-    if (candidateIdEl) candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
+    console.log(`Viewer elements found:`, {
+        candidateViewerEl: !!candidateViewerEl,
+        pairsViewersEl: !!pairsViewersEl,
+        candidateIdEl: !!candidateIdEl
+    });
+    
+    // Clean up old viewer instances (dispose Three.js viewers)
+    cleanupComparisonViewers();
+    
+    // Completely clear and reset viewer elements AFTER cleanup
+    if (candidateViewerEl) {
+        // Clear all children and reset
+        candidateViewerEl.innerHTML = '';
+        candidateViewerEl.id = 'comparison-viewer-candidate'; // Reset ID
+        candidateViewerEl.style.position = 'relative'; // Reset positioning
+        candidateViewerEl.style.width = '100%'; // Ensure width
+        candidateViewerEl.style.height = '400px'; // Ensure height
+        
+        // Add loading message
+        const loadingDiv = document.createElement('div');
+        loadingDiv.style.cssText = 'padding: 20px; text-align: center; color: #666;';
+        loadingDiv.textContent = 'Loading candidate building...';
+        candidateViewerEl.appendChild(loadingDiv);
+        
+        console.log('Candidate viewer element reset and ready');
+    } else {
+        console.error('Candidate viewer element not found!');
+    }
+    
+    if (pairsViewersEl) {
+        pairsViewersEl.innerHTML = '';
+        console.log('Pairs viewers element cleared');
+    } else {
+        console.error('Pairs viewers element not found!');
+    }
+    
+    if (candidateIdEl) {
+        candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
+    }
     
     // Load candidate building first, then pairs sequentially
+    // Always find the file for the candidate building to ensure we load the correct one
     const loadCandidate = () => {
-        if (selectedFile && currentSource === 'A') {
-            loadBuildingInComparisonViewer(candidateBuildingId, selectedFile, candidateViewerEl, candidateIdEl, 'candidate', () => {
-                // After candidate loads, start loading pairs
-                loadPairsSequentially(pairs.slice(0, 3), 0);
-            });
-        } else {
-            // Need to find which file contains this building
-            findAndLoadBuilding(candidateBuildingId, candidateViewerEl, candidateIdEl, 'candidate', () => {
-                // After candidate loads, start loading pairs
-                loadPairsSequentially(pairs.slice(0, 3), 0);
-            });
+        console.log(`=== LOADING CANDIDATE BUILDING ===`);
+        console.log(`Candidate building ID: ${candidateBuildingId}`);
+        
+        // Get fresh reference to elements - try multiple ways to find it
+        let candidateEl = document.getElementById('comparison-viewer-candidate');
+        
+        // If not found by ID, try to find by data attribute or class
+        if (!candidateEl) {
+            candidateEl = document.querySelector('[data-original-id="comparison-viewer-candidate"]');
         }
+        if (!candidateEl) {
+            candidateEl = document.querySelector('.comparison-viewer-container .comparison-viewer');
+        }
+        
+        const candidateIdElRef = document.getElementById('comparison-candidate-id');
+        
+        console.log(`Candidate viewer element (fresh):`, candidateEl);
+        console.log(`Candidate ID element (fresh):`, candidateIdElRef);
+        
+        if (!candidateEl) {
+            console.error('Candidate viewer element is null! Trying to find it again...');
+            // Try one more time after a short delay - maybe DOM isn't ready
+            setTimeout(() => {
+                let retryEl = document.getElementById('comparison-viewer-candidate');
+                if (!retryEl) {
+                    retryEl = document.querySelector('[data-original-id="comparison-viewer-candidate"]');
+                }
+                if (!retryEl) {
+                    retryEl = document.querySelector('.comparison-viewer-container .comparison-viewer');
+                }
+                
+                if (retryEl) {
+                    console.log('Found candidate element on retry');
+                    findAndLoadBuilding(candidateBuildingId, retryEl, candidateIdElRef, 'candidate', () => {
+                        console.log(`=== CANDIDATE BUILDING LOADED ===`);
+                        console.log(`Starting to load ${pairs.length} pairs`);
+                        loadPairsSequentially(pairs.slice(0, 3), 0);
+                    });
+                } else {
+                    console.error('Candidate element still not found after retry');
+                    console.error('Available elements:', document.querySelectorAll('.comparison-viewer'));
+                }
+            }, 200);
+            return;
+        }
+        
+        findAndLoadBuilding(candidateBuildingId, candidateEl, candidateIdElRef, 'candidate', () => {
+            // After candidate loads, start loading pairs
+            console.log(`=== CANDIDATE BUILDING LOADED ===`);
+            console.log(`Starting to load ${pairs.length} pairs`);
+            loadPairsSequentially(pairs.slice(0, 3), 0);
+        });
     };
     
     // Create pair viewer containers first (so they're visible)
     const pairsToShow = pairs.slice(0, 3);
+    console.log(`Creating ${pairsToShow.length} pair viewer containers`);
+    
     pairsToShow.forEach((pair, index) => {
         const pairViewerEl = document.createElement('div');
         pairViewerEl.className = 'comparison-pair-item';
@@ -864,6 +943,9 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         const pairViewer = document.createElement('div');
         pairViewer.className = 'comparison-pair-viewer';
         pairViewer.id = `comparison-viewer-pair-${index}`;
+        pairViewer.style.position = 'relative';
+        pairViewer.style.width = '100%';
+        pairViewer.style.height = '400px';
         pairViewer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999; font-size: 12px;">Waiting to load...</div>';
         pairViewerEl.appendChild(pairViewer);
         
@@ -875,11 +957,17 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         
         if (pairsViewersEl) {
             pairsViewersEl.appendChild(pairViewerEl);
+            console.log(`Added pair viewer container ${index} for building ${pair.index_id}`);
+        } else {
+            console.error(`Pairs viewers element is null, cannot add pair ${index}`);
         }
     });
     
-    // Start loading candidate, then pairs will load sequentially
-    loadCandidate();
+    // Small delay to ensure DOM is ready, then start loading candidate
+    setTimeout(() => {
+        console.log(`Starting to load candidate building after DOM setup`);
+        loadCandidate();
+    }, 100);
 }
 
 // Load pairs sequentially (one at a time) to avoid overwhelming the browser
@@ -902,8 +990,12 @@ function loadPairsSequentially(pairs, currentIndex) {
     
     console.log(`Loading pair ${currentIndex + 1}/${pairs.length}: ${pair.index_id}`);
     
+    // Use unique viewerType for each pair to avoid conflicts and ensure proper cleanup
+    const viewerType = `pair-${currentIndex}`;
+    
     // Find and load the building, then load next pair
-    findAndLoadBuilding(pair.index_id, pairViewer, pairIdEl, `pair-${currentIndex}`, () => {
+    // Each pair gets its own viewer instance with dark red color
+    findAndLoadBuilding(pair.index_id, pairViewer, pairIdEl, viewerType, () => {
         // After this pair loads, load the next one
         setTimeout(() => {
             loadPairsSequentially(pairs, currentIndex + 1);
@@ -915,52 +1007,114 @@ function loadPairsSequentially(pairs, currentIndex) {
 function findAndLoadBuilding(buildingId, viewerEl, idEl, viewerType, onComplete) {
     console.log(`Finding file for building ${buildingId} (${viewerType})`);
     
-    if (viewerEl) {
-        viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666; font-size: 12px;">Finding building file...</div>';
+    if (!viewerEl) {
+        console.error(`Viewer element not found for ${viewerType}`);
+        if (onComplete) onComplete();
+        return;
     }
     
-    fetch(`/api/building/find-file/${encodeURIComponent(buildingId)}`)
-        .then(response => response.json())
+    // Update loading message without clearing the entire element (to preserve any existing structure)
+    let existingLoading = viewerEl.querySelector('div[style*="padding: 20px"]');
+    if (existingLoading) {
+        existingLoading.textContent = 'Finding building file...';
+        existingLoading.style.fontSize = '12px';
+    } else {
+        // Only add loading message if one doesn't exist
+        existingLoading = document.createElement('div');
+        existingLoading.style.cssText = 'padding: 20px; text-align: center; color: #666; font-size: 12px;';
+        existingLoading.textContent = 'Finding building file...';
+        viewerEl.appendChild(existingLoading);
+    }
+    
+    // Store reference to loading element for cleanup
+    const loadingElement = existingLoading;
+    
+    // Extract numeric ID if building ID has prefix (e.g., "bag_0518100000239978" -> "0518100000239978")
+    const numericId = buildingId.replace(/^[^_]*_/, '');
+    console.log(`Searching for building with ID: ${buildingId} (numeric: ${numericId})`);
+    
+    fetch(`/api/building/find-file/${encodeURIComponent(numericId)}`)
+        .then(response => {
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            return response.json();
+        })
         .then(data => {
             if (data.error || !data.file_path) {
                 console.error(`Error finding file for building ${buildingId}:`, data.error || data.message);
-                if (viewerEl) {
-                    viewerEl.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Building not found in any file</div>`;
+                const errorDiv = document.createElement('div');
+                errorDiv.style.cssText = 'padding: 20px; text-align: center; color: #dc3545;';
+                errorDiv.textContent = `Building not found: ${data.error || data.message || 'Unknown error'}`;
+                // Remove loading message and add error
+                if (loadingElement && loadingElement.parentNode) {
+                    loadingElement.parentNode.removeChild(loadingElement);
                 }
+                viewerEl.appendChild(errorDiv);
                 if (onComplete) onComplete();
                 return;
             }
             
             console.log(`Found building ${buildingId} in file ${data.file_path} (source: ${data.source})`);
+            // Remove loading message before loading building
+            if (loadingElement && loadingElement.parentNode) {
+                loadingElement.parentNode.removeChild(loadingElement);
+            }
             loadBuildingInComparisonViewer(buildingId, data.file_path, viewerEl, idEl, viewerType, onComplete);
         })
         .catch(error => {
             console.error(`Error finding file for building ${buildingId}:`, error);
-            if (viewerEl) {
-                viewerEl.innerHTML = `<div style="padding: 20px; text-align: center; color: #dc3545;">Error: ${error.message}</div>`;
+            const errorDiv = document.createElement('div');
+            errorDiv.style.cssText = 'padding: 20px; text-align: center; color: #dc3545;';
+            errorDiv.textContent = `Error: ${error.message}`;
+            // Remove loading message and add error
+            if (loadingElement && loadingElement.parentNode) {
+                loadingElement.parentNode.removeChild(loadingElement);
             }
+            viewerEl.appendChild(errorDiv);
             if (onComplete) onComplete();
         });
 }
 
 // Load a single building in a comparison viewer (shows ONLY that building)
 function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, viewerType, onComplete) {
-    if (!viewerEl) return;
+    console.log(`=== loadBuildingInComparisonViewer called ===`);
+    console.log(`Building ID: ${buildingId}`);
+    console.log(`File path: ${filePath}`);
+    console.log(`Viewer type: ${viewerType}`);
+    console.log(`Viewer element:`, viewerEl);
+    console.log(`ID element:`, idEl);
+    
+    if (!viewerEl) {
+        console.error(`Cannot load building ${buildingId}: viewer element is null`);
+        if (onComplete) onComplete();
+        return;
+    }
     
     console.log(`Loading ONLY building ${buildingId} from ${filePath} in ${viewerType} viewer`);
     
-    // Create a unique container ID for this viewer
+    // Store original ID if it exists (so we can find the element later)
+    const originalId = viewerEl.id || `comparison-viewer-${viewerType}`;
+    
+    // Create a unique container ID for this viewer (but keep original ID as data attribute)
     const containerId = `comparison-viewer-${viewerType}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    console.log(`Container ID: ${containerId}, Original ID: ${originalId}`);
     viewerEl.id = containerId;
+    viewerEl.setAttribute('data-original-id', originalId); // Store original ID
     // Don't clear innerHTML - we'll add loading message as a child element instead
     // This prevents removing the Three.js canvas later
     viewerEl.style.position = 'relative'; // Ensure positioning context for loading message
     
-    // Store viewer reference
+    // Store viewer reference - use unique key per viewer type
     const viewerKey = `comparison-viewer-${viewerType}`;
+    console.log(`Viewer key: ${viewerKey}`);
+    
+    // Extract numeric ID if building ID has prefix (e.g., "bag_0518100000239978" -> "0518100000239978")
+    const numericId = buildingId.replace(/^[^_]*_/, '');
+    console.log(`Loading building with ID: ${buildingId} (using numeric: ${numericId}) from file: ${filePath}`);
     
     // Load ONLY the single building (minimal CityJSON with just this building)
-    fetch(`/api/building/single/${encodeURIComponent(buildingId)}?file=${encodeURIComponent(filePath)}`)
+    fetch(`/api/building/single/${encodeURIComponent(numericId)}?file=${encodeURIComponent(filePath)}`)
         .then(response => {
             if (!response.ok) {
                 return response.json().then(err => Promise.reject(new Error(err.error || `HTTP ${response.status}`)));
@@ -968,13 +1122,27 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
             return response.json();
         })
         .then(minimalCityJSON => {
-            console.log(`Loaded minimal CityJSON with 1 building for ${buildingId}`);
+            console.log(`=== Minimal CityJSON loaded ===`);
+            console.log(`Building ID: ${buildingId}`);
+            console.log(`CityJSON keys:`, Object.keys(minimalCityJSON));
+            console.log(`CityJSON has ${Object.keys(minimalCityJSON.CityObjects || {}).length} city objects`);
+            if (minimalCityJSON.CityObjects) {
+                console.log(`City object IDs:`, Object.keys(minimalCityJSON.CityObjects));
+            }
             
-            // Update loading message
-            viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Initializing viewer...</div>';
+            // Clear any existing content but keep the container structure
+            // Remove loading messages but keep the element itself
+            const existingLoading = viewerEl.querySelector('div[style*="padding: 20px"]');
+            if (existingLoading) {
+                existingLoading.remove();
+            }
             
-            // Use Three.js for comparison viewers (much faster and lighter)
-            viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Initializing viewer...</div>';
+            // Add new loading message
+            const loadingDiv = document.createElement('div');
+            loadingDiv.id = `loading-msg-${containerId}`;
+            loadingDiv.style.cssText = 'padding: 20px; text-align: center; color: #666; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10; background: rgba(255,255,255,0.9); border-radius: 4px;';
+            loadingDiv.textContent = 'Initializing viewer...';
+            viewerEl.appendChild(loadingDiv);
             
             // Check if Three.js is loaded - wait for it if needed
             const checkThreeJS = (attempts = 0) => {
@@ -985,7 +1153,10 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
                     setTimeout(() => checkThreeJS(attempts + 1), 100);
                 } else {
                     console.error('Three.js library failed to load after 5 seconds!');
-                    viewerEl.innerHTML = '<div style="padding: 20px; text-align: center; color: #dc3545;">Three.js library not loaded. Please refresh the page.</div>';
+                    const errorDiv = document.createElement('div');
+                    errorDiv.style.cssText = 'padding: 20px; text-align: center; color: #dc3545; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 10;';
+                    errorDiv.textContent = 'Three.js library not loaded. Please refresh the page.';
+                    viewerEl.appendChild(errorDiv);
                     if (onComplete) onComplete();
                 }
             };
@@ -998,7 +1169,7 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
                     console.log(`Three.js available:`, typeof THREE !== 'undefined');
                     console.log(`ThreeBuildingViewer available:`, typeof ThreeBuildingViewer !== 'undefined');
                     
-                    // Create a loading message div that we can remove later WITHOUT clearing the container
+                    // Get or create loading message
                     let loadingMsg = viewerEl.querySelector(`#loading-msg-${containerId}`);
                     if (!loadingMsg) {
                         loadingMsg = document.createElement('div');
@@ -1008,9 +1179,38 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
                         viewerEl.appendChild(loadingMsg);
                     }
                     
+                    // Dispose old viewer if it exists
+                    if (window[viewerKey]) {
+                        try {
+                            const oldViewer = window[viewerKey];
+                            if (oldViewer.dispose) {
+                                oldViewer.dispose();
+                            }
+                        } catch (e) {
+                            console.warn('Error disposing old viewer:', e);
+                        }
+                        delete window[viewerKey];
+                    }
+                    
+                    // Dispose old viewer if it exists
+                    if (window[viewerKey]) {
+                        try {
+                            const oldViewer = window[viewerKey];
+                            if (oldViewer.dispose) {
+                                oldViewer.dispose();
+                            }
+                        } catch (e) {
+                            console.warn('Error disposing old viewer:', e);
+                        }
+                        delete window[viewerKey];
+                    }
+                    
                     // Create Three.js viewer (lightweight, fast) - NOT Cesium!
-                    const viewer = new ThreeBuildingViewer(containerId);
+                    // Set color based on viewer type: blue for candidate, dark red for pairs
+                    const buildingColor = viewerType === 'candidate' ? 0x2196F3 : 0x8B0000; // Blue for candidate, dark red for pairs
+                    const viewer = new ThreeBuildingViewer(containerId, buildingColor);
                     window[viewerKey] = viewer; // Store reference
+                    console.log(`Stored viewer with key: ${viewerKey} for building: ${buildingId}`);
                     
                     // Wait for viewer to initialize
                     let attempts = 0;
@@ -1110,6 +1310,65 @@ function loadBuildingInComparisonViewer(buildingId, filePath, viewerEl, idEl, vi
 }
 
 
+// Clean up comparison viewer instances
+function cleanupComparisonViewers() {
+    console.log('Cleaning up old comparison viewer instances');
+    
+    // Dispose candidate viewer
+    if (window['comparison-viewer-candidate']) {
+        try {
+            const viewer = window['comparison-viewer-candidate'];
+            if (viewer.dispose) {
+                viewer.dispose();
+            }
+            delete window['comparison-viewer-candidate'];
+        } catch (e) {
+            console.warn('Error disposing candidate viewer:', e);
+        }
+    }
+    
+    // Dispose pair viewers (both old 'pair' key and new 'pair-{index}' keys)
+    for (let i = 0; i < 10; i++) {
+        const viewerKey = `comparison-viewer-pair-${i}`;
+        if (window[viewerKey]) {
+            try {
+                const viewer = window[viewerKey];
+                if (viewer.dispose) {
+                    viewer.dispose();
+                }
+                delete window[viewerKey];
+            } catch (e) {
+                console.warn(`Error disposing pair viewer ${i}:`, e);
+            }
+        }
+    }
+    
+    // Also try to dispose any viewer stored with 'pair' key (old format)
+    if (window['comparison-viewer-pair']) {
+        try {
+            const viewer = window['comparison-viewer-pair'];
+            if (viewer.dispose) {
+                viewer.dispose();
+            }
+            delete window['comparison-viewer-pair'];
+        } catch (e) {
+            console.warn('Error disposing pair viewer:', e);
+        }
+    }
+    
+    // Clean up any other comparison viewer keys
+    Object.keys(window).forEach(key => {
+        if (key.startsWith('comparison-viewer-') && window[key] && typeof window[key] === 'object' && window[key].dispose) {
+            try {
+                window[key].dispose();
+                delete window[key];
+            } catch (e) {
+                console.warn(`Error disposing viewer ${key}:`, e);
+            }
+        }
+    });
+}
+
 // Close BKAFI comparison window
 function closeBkafiComparisonWindow() {
     const comparisonWindow = document.getElementById('bkafi-comparison-window');
@@ -1123,7 +1382,10 @@ function closeBkafiComparisonWindow() {
         overlay.classList.remove('active');
     }
     
-    // Clean up viewers (optional - they'll be recreated on next open)
+    // Clean up viewers when closing
+    cleanupComparisonViewers();
+    
+    // Clear viewer elements
     const candidateViewerEl = document.getElementById('comparison-viewer-candidate');
     const pairsViewersEl = document.getElementById('comparison-pairs-viewers');
     

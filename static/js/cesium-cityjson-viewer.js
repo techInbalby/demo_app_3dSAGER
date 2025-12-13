@@ -519,9 +519,7 @@ class CesiumCityJSONViewer {
                 console.log(`Transformation result:`, result);
                 return result;
             } catch (error) {
-                console.error('Proj4 transformation failed:', error);
-                console.error('Source CRS:', this.sourceCRS, 'Coordinates:', { x, y });
-                // Fallback to approximation
+                // Silently fallback to approximation (don't log as error to reduce console noise)
                 const metersPerDegree = 111320.0;
                 return {
                     lon: this.defaultLocation.longitude + (x / metersPerDegree),

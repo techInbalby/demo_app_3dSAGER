@@ -1,13 +1,13 @@
 // Three.js Building Viewer - Lightweight viewer for single buildings
 class ThreeBuildingViewer {
-    constructor(containerId) {
+    constructor(containerId, buildingColor = 0xffeb3b) {
         this.container = document.getElementById(containerId);
         this.scene = null;
         this.camera = null;
         this.renderer = null;
         this.controls = null;
         this.buildingMesh = null;
-        this.testCube = null; // Test cube to verify rendering
+        this.buildingColor = buildingColor; // Store color for building material
         this.isInitialized = false;
         
         if (!this.container) {
@@ -70,28 +70,37 @@ class ThreeBuildingViewer {
             console.log('Canvas element:', this.renderer.domElement);
             console.log('Canvas dimensions:', this.renderer.domElement.width, 'x', this.renderer.domElement.height);
             
-            // Controls - OrbitControls will be available after script loads
-            // We'll set it up after a small delay or make it optional
-            setTimeout(() => {
+            // Controls - OrbitControls for interactive camera movement
+            // OrbitControls should be loaded from CDN and available as THREE.OrbitControls
+            const setupControls = () => {
                 try {
+                    // OrbitControls from CDN is typically available as THREE.OrbitControls
                     if (typeof THREE !== 'undefined' && THREE.OrbitControls) {
                         this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
                         this.controls.enableDamping = true;
                         this.controls.dampingFactor = 0.05;
                         this.controls.minDistance = 10;
                         this.controls.maxDistance = 500;
-                    } else if (typeof OrbitControls !== 'undefined') {
-                        this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-                        this.controls.enableDamping = true;
-                        this.controls.dampingFactor = 0.05;
-                        this.controls.minDistance = 10;
-                        this.controls.maxDistance = 500;
+                        this.controls.enablePan = true; // Allow panning (right-click drag or middle mouse)
+                        this.controls.enableZoom = true; // Allow zooming (scroll wheel)
+                        this.controls.enableRotate = true; // Allow rotation (left-click drag)
+                        this.controls.autoRotate = false; // Don't auto-rotate
+                        this.controls.screenSpacePanning = false; // Pan in world space (not screen space)
+                        
+                        console.log('OrbitControls initialized successfully - you can now rotate/pan/zoom the building');
+                    } else {
+                        console.warn('OrbitControls not found - trying alternative loading...');
+                        // Retry if not loaded yet
+                        setTimeout(setupControls, 200);
                     }
                 } catch (controlsError) {
-                    console.warn('OrbitControls not available, camera will be fixed:', controlsError);
-                    // Camera can still be positioned manually
+                    console.error('Error setting up OrbitControls:', controlsError);
+                    console.warn('Camera will be fixed (no rotation/panning)');
                 }
-            }, 100);
+            };
+            
+            // Set up controls after a short delay to ensure OrbitControls script is loaded
+            setTimeout(setupControls, 100);
             
             // Lighting
             const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
@@ -110,15 +119,7 @@ class ThreeBuildingViewer {
             const axesHelper = new THREE.AxesHelper(10);
             this.scene.add(axesHelper);
             
-            // Add a test cube to verify rendering works (will be removed when building loads)
-            const testGeometry = new THREE.BoxGeometry(5, 5, 5);
-            const testMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
-            const testCube = new THREE.Mesh(testGeometry, testMaterial);
-            testCube.position.set(0, 2.5, 0);
-            this.scene.add(testCube);
-            this.testCube = testCube; // Store reference to remove later
-            
-            // Render once immediately to show white background and test cube
+            // Render once immediately to show white background
             this.renderer.render(this.scene, this.camera);
             
             // Animation loop
@@ -322,9 +323,9 @@ class ThreeBuildingViewer {
             
             console.log('Extruded geometry created, height:', scaledHeight);
             
-            // Material (yellow highlight)
+            // Material - use the color passed to constructor
             const material = new THREE.MeshStandardMaterial({
-                color: 0xffeb3b, // Yellow
+                color: this.buildingColor,
                 metalness: 0.1,
                 roughness: 0.8
             });
@@ -398,21 +399,6 @@ class ThreeBuildingViewer {
             
             buildingLoaded = true;
             
-            // DON'T remove test cube yet - keep it visible alongside building for debugging
-            // Only remove if building is confirmed visible
-            setTimeout(() => {
-                if (this.buildingMesh && this.buildingMesh.visible && this.testCube) {
-                    console.log('Building confirmed visible, removing test cube');
-                    this.scene.remove(this.testCube);
-                    this.testCube.geometry.dispose();
-                    this.testCube.material.dispose();
-                    this.testCube = null;
-                    this.renderer.render(this.scene, this.camera);
-                } else {
-                    console.warn('Building not confirmed visible, keeping test cube');
-                }
-            }, 500);
-            
             console.log('Building loaded successfully in Three.js viewer');
             console.log('Scene now has', this.scene.children.length, 'children');
             console.log('Building mesh visible:', this.buildingMesh.visible);
@@ -435,21 +421,6 @@ class ThreeBuildingViewer {
                 verticesCount: vertices ? vertices.length : 0,
                 transform: transform
             });
-            
-            // Keep test cube visible if building failed to load (change to red to indicate error)
-            if (this.testCube) {
-                console.log('Building load failed, changing test cube to red');
-                this.testCube.material.color.setHex(0xff0000); // Red for error
-                this.renderer.render(this.scene, this.camera);
-            } else {
-                console.log('Building load failed, creating red test cube');
-                const testGeometry = new THREE.BoxGeometry(5, 5, 5);
-                const testMaterial = new THREE.MeshStandardMaterial({ color: 0xff0000 }); // Red for error
-                this.testCube = new THREE.Mesh(testGeometry, testMaterial);
-                this.testCube.position.set(0, 2.5, 0);
-                this.scene.add(this.testCube);
-                this.renderer.render(this.scene, this.camera);
-            }
         }
     }
     

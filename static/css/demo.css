@@ -708,6 +708,8 @@ body {
     display: flex;
     flex-direction: column;
     min-width: 0;
+    justify-content: center; /* Center candidate building vertically */
+    align-items: center; /* Center horizontally within the container */
 }
 
 .comparison-pairs-container {
