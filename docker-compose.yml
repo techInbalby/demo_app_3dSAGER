@@ -1,35 +1,29 @@
+version: '3.8'
+
 services:
-  app:
+  web:
     build: .
+    container_name: demo_app_3dsager
     ports:
       - "5001:5000"
     volumes:
+      # Data is copied into image during build to avoid OneDrive file locking issues
+      # Uncomment the line below ONLY if you need to update data without rebuilding
+      # - ./data:/app/data:ro
+      
+      # Mount writable directories for runtime data
+      - ./results:/app/results
+      - ./saved_model_files:/app/saved_model_files
       - ./uploads:/app/uploads
       - ./logs:/app/logs
     environment:
-      - FLASK_ENV=production
+      - FLASK_ENV=development
       - FLASK_APP=app.py
+      - FLASK_DEBUG=1
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000/api/health"]
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/')"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
-
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./static:/var/www/static:ro
-      - ./templates:/var/www/templates:ro
-    depends_on:
-      - app
-    restart: unless-stopped
-
-volumes:
-  uploads:
-  logs:

@@ -1,11 +1,13 @@
 // 3dSAGER Demo JavaScript
 let currentSource = 'A';
 let currentSessionId = null;
+let locationMap = null;
 
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', function() {
     console.log('3dSAGER Demo initialized');
     loadDataFiles();
+    initLocationMap();
 });
 
 // Load data files from API
@@ -76,33 +78,82 @@ function selectFile(filePath, source) {
     });
 }
 
+// Initialize location map
+function initLocationMap() {
+    // Wait for Leaflet to load
+    if (typeof L === 'undefined') {
+        setTimeout(initLocationMap, 100);
+        return;
+    }
+    
+    try {
+        // Initialize Leaflet map (The Hague coordinates)
+        locationMap = L.map('location-map').setView([52.0705, 4.3007], 13);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(locationMap);
+        
+        // Add marker for The Hague
+        L.marker([52.0705, 4.3007])
+            .addTo(locationMap)
+            .bindPopup('The Hague, Netherlands<br>3dSAGER Demo Location')
+            .openPopup();
+        
+        console.log('Location map initialized');
+    } catch (error) {
+        console.error('Error initializing location map:', error);
+    }
+}
+
 // Load file in 3D viewer
 function loadFileInViewer(filePath) {
     console.log('Loading file in viewer:', filePath);
     console.log('Viewer available:', !!window.viewer);
+    console.log('Cesium available:', typeof Cesium !== 'undefined');
     
-    if (window.viewer && window.viewer.loadCityJSON) {
-        // Extract relative path for API
-        const relativePath = filePath.replace('data/RawCitiesData/The Hague/', '');
-        console.log('Using relative path:', relativePath);
-        window.viewer.loadCityJSON(relativePath);
-        
-        // Also try to fit camera after a delay
-        setTimeout(() => {
-            if (window.viewer && window.viewer.zoomToModel) {
-                window.viewer.zoomToModel();
+    // Wait for viewer to be ready (with retry)
+    const tryLoad = (attempts = 0) => {
+        if (window.viewer && window.viewer.loadCityJSON) {
+            // Extract relative path for API
+            const relativePath = filePath.replace('data/RawCitiesData/The Hague/', '');
+            console.log('Using relative path:', relativePath);
+            window.viewer.loadCityJSON(relativePath);
+            
+            // Also try to fit camera after a delay
+            setTimeout(() => {
+                if (window.viewer && window.viewer.zoomToModel) {
+                    window.viewer.zoomToModel();
+                }
+            }, 1000);
+        } else if (attempts < 20) {
+            // Retry up to 20 times (2 seconds total)
+            console.log(`Waiting for viewer to initialize... (attempt ${attempts + 1})`);
+            setTimeout(() => tryLoad(attempts + 1), 100);
+        } else {
+            // Show error after retries exhausted
+            console.error('Cesium viewer not available after waiting');
+            const viewer = document.getElementById('viewer');
+            if (viewer) {
+                let errorMsg = '3D Viewer not ready. ';
+                if (typeof Cesium === 'undefined') {
+                    errorMsg += 'Cesium library failed to load. Check your internet connection and Cesium CDN.';
+                } else {
+                    errorMsg += 'Viewer initialization failed. Please refresh the page.';
+                }
+                viewer.innerHTML = `
+                    <div class="placeholder">
+                        <div class="placeholder-icon">⚠️</div>
+                        <p>${errorMsg}</p>
+                        <button onclick="location.reload()" style="margin-top: 10px; padding: 8px 16px; background: #667eea; color: white; border: none; border-radius: 4px; cursor: pointer;">Refresh Page</button>
+                    </div>
+                `;
             }
-        }, 500);
-    } else {
-        console.error('CityJSON viewer not available');
-        const viewer = document.getElementById('viewer');
-        viewer.innerHTML = `
-            <div class="placeholder">
-                <div class="placeholder-icon">⚠️</div>
-                <p>3D Viewer not ready. Please refresh the page.</p>
-            </div>
-        `;
-    }
+        }
+    };
+    
+    tryLoad();
 }
 
 // Pipeline step functions
@@ -134,3 +185,92 @@ function toggleFullscreen() {
         window.viewer.toggleFullscreen();
     }
 }
+
+// Show building matches window
+function showBuildingMatches(buildingId, buildingName, matches) {
+    const matchesWindow = document.getElementById('matches-window');
+    const buildingNameEl = document.getElementById('building-name');
+    const buildingIdEl = document.getElementById('building-id');
+    const matchesList = document.getElementById('matches-list');
+    
+    if (!matchesWindow || !buildingNameEl || !buildingIdEl || !matchesList) {
+        console.error('Matches window elements not found');
+        return;
+    }
+    
+    // Update building info
+    buildingNameEl.textContent = buildingName || 'Building';
+    buildingIdEl.textContent = `ID: ${buildingId}`;
+    
+    // Clear and populate matches
+    matchesList.innerHTML = '';
+    
+    if (matches && matches.length > 0) {
+        matches.forEach((match, index) => {
+            const matchItem = document.createElement('div');
+            matchItem.className = 'match-item';
+            matchItem.innerHTML = `
+                <div class="match-header">
+                    <span class="match-source">${match.source || 'Source'}</span>
+                    <span class="match-confidence">${((match.confidence || match.similarity || 0) * 100).toFixed(1)}%</span>
+                </div>
+                <div class="match-details">
+                    <p><strong>ID:</strong> ${match.id || match.building_id || 'N/A'}</p>
+                    ${match.similarity ? `<p><strong>Similarity:</strong> ${(match.similarity * 100).toFixed(1)}%</p>` : ''}
+                    ${match.features ? `<p><strong>Features:</strong> ${match.features}</p>` : ''}
+                    <button onclick="viewMatch('${match.id || match.building_id || ''}')">View in 3D</button>
+                </div>
+            `;
+            matchesList.appendChild(matchItem);
+        });
+    } else {
+        matchesList.innerHTML = '<p style="text-align: center; color: #666; padding: 20px;">No matches found for this building</p>';
+    }
+    
+    // Show the window
+    matchesWindow.style.display = 'block';
+    
+    // Add overlay (optional, for better UX)
+    let overlay = document.getElementById('matches-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'matches-overlay';
+        overlay.className = 'matches-overlay';
+        overlay.onclick = closeMatchesWindow;
+        document.body.appendChild(overlay);
+    }
+    overlay.classList.add('active');
+}
+
+// Close matches window
+function closeMatchesWindow() {
+    const matchesWindow = document.getElementById('matches-window');
+    const overlay = document.getElementById('matches-overlay');
+    
+    if (matchesWindow) {
+        matchesWindow.style.display = 'none';
+    }
+    
+    if (overlay) {
+        overlay.classList.remove('active');
+    }
+}
+
+// View a specific match in 3D
+function viewMatch(matchId) {
+    console.log('Viewing match:', matchId);
+    // Close matches window
+    closeMatchesWindow();
+    
+    // TODO: Implement logic to highlight/zoom to the matched building
+    // This would require loading the matched building's data and highlighting it
+    if (window.viewer) {
+        // You can add logic here to highlight the matched building
+        alert(`Viewing match: ${matchId}\n(This feature can be extended to highlight the matched building in the 3D viewer)`);
+    }
+}
+
+// Make functions globally available
+window.showBuildingMatches = showBuildingMatches;
+window.closeMatchesWindow = closeMatchesWindow;
+window.viewMatch = viewMatch;

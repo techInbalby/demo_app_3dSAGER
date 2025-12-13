@@ -6,9 +6,14 @@
     <title>3dSAGER Demo</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='css/demo.css') }}">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <!-- Three.js (Local) -->
-    <script src="{{ url_for('static', filename='js/threejs/three.min.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/threejs/OrbitControls.js') }}"></script>
+    <!-- Cesium CSS -->
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <!-- Leaflet CSS for location map -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- Cesium JS -->
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.110/Build/Cesium/Cesium.js"></script>
+    <!-- Note: No Cesium Ion token needed - we're using ellipsoid terrain instead of world terrain -->
+    <!-- This works perfectly for displaying CityJSON building models -->
 </head>
 <body>
     <div class="demo-layout">
@@ -40,6 +45,12 @@
                         <div class="loading">Loading files...</div>
                     </div>
                 </div>
+            </div>
+            
+            <!-- Location Map -->
+            <div class="location-map">
+                <h3>Location</h3>
+                <div id="location-map" style="height: 200px; width: 100%; border-radius: 8px; margin-top: 10px;"></div>
             </div>
             
             <!-- Pipeline Steps -->
@@ -104,8 +115,27 @@
         </div>
     </div>
 
-    <script src="{{ url_for('static', filename='js/cityjson-parser.js') }}"></script>
-    <script src="{{ url_for('static', filename='js/cityjson-viewer.js') }}"></script>
+    <!-- Matches Window -->
+    <div id="matches-window" class="matches-window" style="display: none;">
+        <div class="matches-header">
+            <h3>Building Matches</h3>
+            <button class="close-btn" onclick="closeMatchesWindow()">×</button>
+        </div>
+        <div class="matches-content">
+            <div class="building-info">
+                <h4 id="building-name">Building Name</h4>
+                <p id="building-id">ID: -</p>
+            </div>
+            <div class="matches-list" id="matches-list">
+                <!-- Matches will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Leaflet JS for location map -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Cesium CityJSON Viewer -->
+    <script src="{{ url_for('static', filename='js/cesium-cityjson-viewer.js') }}"></script>
     <script src="{{ url_for('static', filename='js/demo.js') }}"></script>
 </body>
 </html>

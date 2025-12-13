@@ -1,289 +1,244 @@
-from flask import Flask, render_template, request, jsonify, send_file
+"""
+3dSAGER Demo Flask Application
+Provides web interface and API endpoints for 3D geospatial entity resolution
+"""
+
 import os
 import json
-import time
-import glob
-from datetime import datetime
-import uuid
+from flask import Flask, render_template, jsonify, request
+from pathlib import Path
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
 
+# Configuration
+BASE_DIR = Path(__file__).parent
+DATA_DIR = BASE_DIR / 'data'
+RESULTS_DIR = BASE_DIR / 'results'
+SAVED_MODEL_DIR = BASE_DIR / 'saved_model_files'
+UPLOADS_DIR = BASE_DIR / 'uploads'
+LOGS_DIR = BASE_DIR / 'logs'
+
+# Ensure directories exist
+for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, UPLOADS_DIR, LOGS_DIR]:
+    directory.mkdir(exist_ok=True)
 
 
 @app.route('/')
-def home():
+def index():
+    """Home page"""
     return render_template('index.html')
+
 
 @app.route('/demo')
 def demo():
+    """Demo page with 3D viewer"""
     return render_template('demo.html')
 
-@app.route('/test')
-def test():
-    return send_file('test_file_selection.html')
-
-@app.route('/debug')
-def debug():
-    return send_file('debug_demo.html')
-
-@app.route('/api/upload', methods=['POST'])
-def upload_file():
-    """Handle file upload for 3D data processing"""
-    if 'file' not in request.files:
-        return jsonify({'error': 'No file provided'}), 400
-    
-    file = request.files['file']
-    if file.filename == '':
-        return jsonify({'error': 'No file selected'}), 400
-    
-    # Generate unique filename
-    file_id = str(uuid.uuid4())
-    filename = f"{file_id}_{file.filename}"
-    filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-    file.save(filepath)
-    
-    return jsonify({
-        'success': True,
-        'file_id': file_id,
-        'filename': filename,
-        'message': 'File uploaded successfully'
-    })
-
-@app.route('/api/pipeline/run', methods=['POST'])
-def run_pipeline():
-    """Execute the 3dSAGER pipeline"""
-    data = request.get_json()
-    file_id = data.get('file_id')
-    
-    if not file_id:
-        return jsonify({'error': 'File ID required'}), 400
-    
-    # Simulate pipeline execution
-    # In a real implementation, this would call your actual 3dSAGER pipeline
-    pipeline_stages = [
-        {'id': 'preprocessing', 'name': 'Data Preprocessing', 'status': 'running'},
-        {'id': 'analysis', 'name': 'Scene Analysis', 'status': 'pending'},
-        {'id': 'generation', 'name': 'Content Generation', 'status': 'pending'},
-        {'id': 'visualization', 'name': '3D Visualization', 'status': 'pending'}
-    ]
-    
-    # Simulate processing time
-    time.sleep(2)
-    
-    # Mock results
-    results = {
-        'objects_detected': 42,
-        'processing_time': 1250,
-        'confidence': 94.5,
-        'pipeline_complete': True,
-        'stages': [
-            {'id': 'preprocessing', 'name': 'Data Preprocessing', 'status': 'completed'},
-            {'id': 'analysis', 'name': 'Scene Analysis', 'status': 'completed'},
-            {'id': 'generation', 'name': 'Content Generation', 'status': 'completed'},
-            {'id': 'visualization', 'name': '3D Visualization', 'status': 'completed'}
-        ]
-    }
-    
-    return jsonify(results)
-
-@app.route('/api/pipeline/status/<file_id>')
-def pipeline_status(file_id):
-    """Get pipeline execution status"""
-    # Mock status - in real implementation, check actual pipeline status
-    return jsonify({
-        'file_id': file_id,
-        'status': 'completed',
-        'progress': 100,
-        'stages': [
-            {'id': 'preprocessing', 'status': 'completed'},
-            {'id': 'analysis', 'status': 'completed'},
-            {'id': 'generation', 'status': 'completed'},
-            {'id': 'visualization', 'status': 'completed'}
-        ]
-    })
-
-@app.route('/api/results/<file_id>')
-def get_results(file_id):
-    """Get pipeline results"""
-    # Mock results - in real implementation, return actual results
-    results = {
-        'file_id': file_id,
-        'timestamp': datetime.now().isoformat(),
-        'objects_detected': 42,
-        'processing_time': 1250,
-        'confidence': 94.5,
-        'scene_analysis': {
-            'objects': [
-                {'type': 'Building', 'count': 15, 'confidence': 0.95},
-                {'type': 'Vehicle', 'count': 8, 'confidence': 0.87},
-                {'type': 'Tree', 'count': 12, 'confidence': 0.92},
-                {'type': 'Road', 'count': 7, 'confidence': 0.98}
-            ]
-        },
-        'generation_results': {
-            'synthetic_objects': 5,
-            'enhanced_scene': True,
-            'quality_score': 0.89
-        }
-    }
-    
-    return jsonify(results)
-
-@app.route('/api/export/<file_id>')
-def export_results(file_id):
-    """Export pipeline results as JSON file"""
-    results = get_results(file_id).get_json()
-    
-    # Create export file
-    export_filename = f"3dsager_results_{file_id}.json"
-    export_path = os.path.join(app.config['UPLOAD_FOLDER'], export_filename)
-    
-    with open(export_path, 'w') as f:
-        json.dump(results, f, indent=2)
-    
-    return send_file(export_path, as_attachment=True, download_name=export_filename)
 
 @app.route('/api/data/files')
-def get_data_files():
-    """Get available data files from Source A and Source B"""
-    data_dir = 'data/RawCitiesData/The Hague'
-    
-    source_a_files = []
-    source_b_files = []
-    
-    # Get Source A files
-    source_a_path = os.path.join(data_dir, 'Source A', '*.json')
-    for file_path in glob.glob(source_a_path):
-        filename = os.path.basename(file_path)
-        file_size = os.path.getsize(file_path)
-        source_a_files.append({
-            'filename': filename,
-            'path': file_path,
-            'size': file_size,
-            'source': 'A'
+def get_files():
+    """Get list of available CityJSON files from Source A and Source B"""
+    try:
+        # Try different directory name variations
+        source_a_paths = [
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source A',  # With space
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceA',   # Without space
+            DATA_DIR / 'Source A',
+            DATA_DIR / 'SourceA',
+            DATA_DIR
+        ]
+        
+        source_b_paths = [
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source B',  # With space
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceB',   # Without space
+            DATA_DIR / 'Source B',
+            DATA_DIR / 'SourceB',
+            DATA_DIR
+        ]
+        
+        # Find first existing path
+        source_a_path = None
+        for path in source_a_paths:
+            if path.exists():
+                source_a_path = path
+                break
+        
+        source_b_path = None
+        for path in source_b_paths:
+            if path.exists():
+                source_b_path = path
+                break
+        
+        def get_file_list(directory):
+            files = []
+            if directory.exists() and directory.is_dir():
+                for file_path in directory.rglob('*.json'):
+                    try:
+                        rel_path = file_path.relative_to(DATA_DIR)
+                        files.append({
+                            'filename': file_path.name,
+                            'path': str(rel_path),
+                            'size': file_path.stat().st_size
+                        })
+                    except ValueError:
+                        files.append({
+                            'filename': file_path.name,
+                            'path': str(file_path),
+                            'size': file_path.stat().st_size
+                        })
+            return files
+        
+        return jsonify({
+            'source_a': get_file_list(source_a_path),
+            'source_b': get_file_list(source_b_path)
         })
-    
-    # Get Source B files (index set)
-    source_b_path = os.path.join(data_dir, 'Source B', '*.json')
-    for file_path in glob.glob(source_b_path):
-        filename = os.path.basename(file_path)
-        file_size = os.path.getsize(file_path)
-        source_b_files.append({
-            'filename': filename,
-            'path': file_path,
-            'size': file_size,
-            'source': 'B'
-        })
-    
-    return jsonify({
-        'source_a': source_a_files,
-        'source_b': source_b_files,
-        'total_files': len(source_a_files) + len(source_b_files)
-    })
+    except Exception as e:
+        return jsonify({'error': str(e), 'source_a': [], 'source_b': []}), 500
+
 
 @app.route('/api/data/select', methods=['POST'])
-def select_data_file():
-    """Select a data file for processing"""
-    data = request.get_json()
-    file_path = data.get('file_path')
-    source = data.get('source')
-    
-    if not file_path or not os.path.exists(file_path):
-        return jsonify({'error': 'Invalid file path'}), 400
-    
-    # Generate a unique session ID for this processing session
-    session_id = str(uuid.uuid4())
-    
-    # Store the selected file info
-    file_info = {
-        'session_id': session_id,
-        'file_path': file_path,
-        'source': source,
-        'filename': os.path.basename(file_path),
-        'timestamp': datetime.now().isoformat()
-    }
-    
-    return jsonify({
-        'success': True,
-        'session_id': session_id,
-        'file_info': file_info,
-        'message': f'Selected {source} file: {os.path.basename(file_path)}'
-    })
+def select_file():
+    """Select a file for processing"""
+    try:
+        data = request.get_json()
+        file_path = data.get('file_path')
+        source = data.get('source', 'A')
+        
+        if not file_path:
+            return jsonify({'success': False, 'error': 'No file path provided'}), 400
+        
+        full_path = DATA_DIR / file_path
+        if not full_path.exists():
+            alt_paths = [
+                DATA_DIR / 'RawCitiesData' / 'The Hague' / file_path,
+                DATA_DIR / file_path,
+                Path(file_path) if os.path.isabs(file_path) else None
+            ]
+            for alt_path in alt_paths:
+                if alt_path and alt_path.exists():
+                    full_path = alt_path
+                    break
+            else:
+                return jsonify({'success': False, 'error': f'File not found: {file_path}'}), 404
+        
+        import uuid
+        return jsonify({
+            'success': True,
+            'session_id': str(uuid.uuid4()),
+            'file_path': file_path,
+            'source': source
+        })
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
-@app.route('/api/pipeline/run/<session_id>', methods=['POST'])
-def run_pipeline_with_session(session_id):
-    """Execute the 3dSAGER pipeline with selected file"""
-    # In a real implementation, you would retrieve the session data
-    # and process the actual file. For now, we'll simulate the pipeline.
-    
-    # Simulate pipeline execution for 3dSAGER
-    pipeline_stages = [
-        {'id': 'preprocessing', 'name': 'Mesh Preprocessing', 'status': 'running'},
-        {'id': 'featurization', 'name': 'Geometric Featurization', 'status': 'pending'},
-        {'id': 'blocking', 'name': 'BKAFI Blocking', 'status': 'pending'},
-        {'id': 'matching', 'name': 'Entity Matching', 'status': 'pending'}
-    ]
-    
-    # Simulate processing time
-    time.sleep(2)
-    
-    # Mock results for 3dSAGER pipeline
-    results = {
-        'session_id': session_id,
-        'objects_processed': 156,
-        'processing_time': 3200,
-        'matching_confidence': 89.2,
-        'pipeline_complete': True,
-        'stages': [
-            {'id': 'preprocessing', 'name': 'Mesh Preprocessing', 'status': 'completed'},
-            {'id': 'featurization', 'name': 'Geometric Featurization', 'status': 'completed'},
-            {'id': 'blocking', 'name': 'BKAFI Blocking', 'status': 'completed'},
-            {'id': 'matching', 'name': 'Entity Matching', 'status': 'completed'}
-        ],
-        'entity_resolution_results': {
-            'matched_entities': 23,
-            'coordinate_agnostic_matches': 18,
-            'geometric_similarity_score': 0.89,
-            'blocking_efficiency': 0.94
-        }
-    }
-    
-    return jsonify(results)
 
 @app.route('/api/data/file/<path:file_path>')
-def serve_data_file(file_path):
-    """Serve data files for 3D visualization"""
+def get_file(file_path):
+    """Get CityJSON file content"""
     try:
-        print(f"API received file_path: {file_path}")
+        from urllib.parse import unquote
+        # URL decode the path manually to ensure it's decoded
+        file_path = unquote(str(file_path))
+        print(f"DEBUG: Requested file path: {file_path}")
+        print(f"DEBUG: DATA_DIR: {DATA_DIR}")
+        print(f"DEBUG: DATA_DIR exists: {DATA_DIR.exists()}")
         
-        # Ensure the file path is safe
-        if '..' in file_path or file_path.startswith('/'):
-            return jsonify({'error': 'Invalid file path'}), 400
+        # Try multiple path combinations
+        file_name = Path(file_path).name
+        possible_paths = [
+            DATA_DIR / file_path,  # Direct path from data directory (most common)
+            # Try with "Source A" (with space)
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source A' / file_name,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'Source B' / file_name,
+            # Try with "SourceA" (without space)
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceA' / file_name,
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / 'SourceB' / file_name,
+            # Try if path doesn't include RawCitiesData prefix
+            DATA_DIR / 'RawCitiesData' / 'The Hague' / file_path,
+        ]
         
-        # Construct full path
-        full_path = os.path.join('data/RawCitiesData/The Hague', file_path)
-        print(f"Constructed full_path: {full_path}")
+        # Also try if file_path already includes the full structure
+        if 'RawCitiesData' in file_path or 'The Hague' in file_path:
+            # Path already includes the structure, just use it directly
+            possible_paths.insert(0, DATA_DIR / file_path)
         
-        if not os.path.exists(full_path):
-            return jsonify({'error': 'File not found'}), 404
+        print(f"DEBUG: Trying {len(possible_paths)} possible paths...")
+        found_path = None
+        for i, path in enumerate(possible_paths):
+            if path:
+                exists = path.exists()
+                is_file = path.is_file() if exists else False
+                print(f"DEBUG: Path {i+1}: {path} - exists: {exists}, is_file: {is_file}")
+                if exists and is_file:
+                    found_path = path
+                    print(f"DEBUG: Found file at: {found_path}")
+                    break
+        
+        if not found_path:
+            # Log available paths for debugging
+            print(f"ERROR: File not found: {file_path}")
+            print(f"ERROR: Tried paths: {[str(p) for p in possible_paths if p]}")
+            # List what's actually in the data directory
+            if DATA_DIR.exists():
+                print(f"DEBUG: Contents of DATA_DIR: {list(DATA_DIR.iterdir())[:10]}")
+            return jsonify({
+                'error': f'File not found: {file_path}',
+                'tried_paths': [str(p) for p in possible_paths if p],
+                'data_dir': str(DATA_DIR),
+                'data_dir_exists': DATA_DIR.exists()
+            }), 404
         
         # Read and return the JSON file
-        with open(full_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        # Data is now in the image, so no OneDrive file locking issues
+        print(f"DEBUG: Reading file: {found_path}")
+        print(f"DEBUG: File size: {found_path.stat().st_size} bytes")
         
-        return jsonify(data)
+        with open(found_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            print(f"DEBUG: Successfully loaded JSON, {len(data)} top-level keys")
+            return jsonify(data)
+            
+    except json.JSONDecodeError as e:
+        print(f"ERROR: JSON decode error: {e}")
+        return jsonify({'error': f'Invalid JSON: {str(e)}'}), 400
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"ERROR: Exception in get_file: {e}")
+        print(f"ERROR: Traceback:\n{error_trace}")
+        return jsonify({
+            'error': str(e),
+            'traceback': error_trace
+        }), 500
 
-@app.route('/api/health')
-def health_check():
+
+@app.route('/api/building/matches/<building_id>')
+def get_building_matches(building_id):
+    """Get matches for a specific building"""
+    try:
+        # Mock data - replace with actual matching logic
+        mock_matches = [
+            {
+                'id': f'match_{building_id}_1',
+                'building_id': f'B_{building_id}',
+                'source': 'Source B',
+                'confidence': 0.85,
+                'similarity': 0.87,
+                'features': 'Geometric similarity: 0.87'
+            }
+        ]
+        return jsonify({'building_id': building_id, 'matches': mock_matches})
+    except Exception as e:
+        return jsonify({'error': str(e), 'matches': []}), 500
+
+
+@app.route('/health')
+def health():
     """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'version': '1.0.0'
-    })
+    return jsonify({'status': 'healthy'}), 200
+
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=3000)
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)
