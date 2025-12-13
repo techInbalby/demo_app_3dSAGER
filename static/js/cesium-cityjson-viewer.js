@@ -164,14 +164,20 @@ class CesiumCityJSONViewer {
         // Select the entity (for highlighting)
         this.viewer.selectedEntity = entity;
         
+        // Store the current material as the "original" (this will be the correct color after updates)
+        // This ensures that when highlight resets, it uses the latest color, not an old one
+        if (!entity.originalMaterial) {
+            entity.originalMaterial = entity.polygon.material;
+        }
+        
         // Highlight the building temporarily
-        const originalMaterial = entity.polygon.material;
         entity.polygon.material = Cesium.Color.YELLOW.withAlpha(0.7);
         
-        // Reset highlight after 2 seconds
+        // Reset highlight after 2 seconds - use the stored original material
         setTimeout(() => {
-            if (entity.polygon && originalMaterial) {
-                entity.polygon.material = originalMaterial;
+            if (entity.polygon) {
+                // Use the stored originalMaterial if available, otherwise use current material
+                entity.polygon.material = entity.originalMaterial || entity.polygon.material;
             }
         }, 2000);
         
@@ -839,7 +845,7 @@ class CesiumCityJSONViewer {
     getMaterialForObjectType(objectType) {
         // Colors with full opacity (255 = fully opaque, no transparency)
         const colors = {
-            'Building': Cesium.Color.fromBytes(116, 151, 223, 255),
+            'Building': Cesium.Color.fromBytes(116, 151, 223, 255), // Default blue
             'BuildingPart': Cesium.Color.fromBytes(116, 151, 223, 255),
             'BuildingInstallation': Cesium.Color.fromBytes(116, 151, 223, 255),
             'Bridge': Cesium.Color.fromBytes(153, 153, 153, 255),
@@ -851,6 +857,88 @@ class CesiumCityJSONViewer {
         };
         
         return colors[objectType] || Cesium.Color.fromBytes(136, 136, 136, 255);
+    }
+    
+    /**
+     * Update building color based on pipeline stage
+     * @param {string} buildingId - Building ID to update
+     * @param {string} colorName - Color name: 'blue', 'orange', 'yellow', 'green', 'red', 'darkgray'
+     */
+    updateBuildingColor(buildingId, colorName) {
+        const colorMap = {
+            'blue': Cesium.Color.fromBytes(116, 151, 223, 255),      // Default blue
+            'orange': Cesium.Color.fromBytes(255, 152, 0, 255),      // Orange - has features
+            'yellow': Cesium.Color.fromBytes(255, 235, 59, 255),       // Yellow - has BKAFI pairs
+            'green': Cesium.Color.fromBytes(76, 175, 80, 255),        // Green - true match
+            'red': Cesium.Color.fromBytes(244, 67, 54, 255),          // Red - false positive
+            'darkgray': Cesium.Color.fromBytes(97, 97, 97, 255)       // Dark gray - no match
+        };
+        
+        const newColor = colorMap[colorName] || colorMap['blue'];
+        
+        // Try multiple ID formats to find the building
+        let entities = this.buildingEntities.get(buildingId);
+        
+        // If not found, try extracting numeric ID
+        if (!entities || entities.length === 0) {
+            const numericMatch = buildingId.match(/(\d{10,})/);
+            if (numericMatch) {
+                const numericId = numericMatch[1];
+                // Try numeric ID
+                entities = this.buildingEntities.get(numericId);
+                // Try with bag_ prefix
+                if (!entities || entities.length === 0) {
+                    entities = this.buildingEntities.get(`bag_${numericId}`);
+                }
+            }
+        }
+        
+        // If still not found, try searching all keys
+        if (!entities || entities.length === 0) {
+            const numericMatch = buildingId.match(/(\d{10,})/);
+            if (numericMatch) {
+                const numericId = numericMatch[1];
+                // Search through all keys to find a match
+                for (const [key, value] of this.buildingEntities.entries()) {
+                    const keyNumericMatch = key.match(/(\d{10,})/);
+                    if (keyNumericMatch && keyNumericMatch[1] === numericId) {
+                        entities = value;
+                        console.log(`Found building by numeric ID match: ${key} matches ${buildingId}`);
+                        break;
+                    }
+                }
+            }
+        }
+        
+        if (entities && entities.length > 0) {
+            entities.forEach(entity => {
+                if (entity.polygon) {
+                    // Always update the originalMaterial reference to the new color
+                    // This ensures that when highlight resets, it uses the correct color
+                    entity.originalMaterial = newColor;
+                    
+                    // Update the current material (even if it's currently highlighted)
+                    // If it's highlighted, the highlight will reset to the new color after timeout
+                    entity.polygon.material = newColor;
+                }
+            });
+            console.log(`Updated color for building ${buildingId} to ${colorName}`);
+            return true;
+        } else {
+            console.warn(`Building ${buildingId} not found in entities map. Available keys:`, Array.from(this.buildingEntities.keys()).slice(0, 10));
+            return false;
+        }
+    }
+    
+    /**
+     * Update colors for multiple buildings at once
+     * @param {Object} buildingColors - Map of buildingId -> colorName
+     */
+    updateBuildingColors(buildingColors) {
+        console.log(`Updating colors for ${Object.keys(buildingColors).length} buildings`);
+        Object.entries(buildingColors).forEach(([buildingId, colorName]) => {
+            this.updateBuildingColor(buildingId, colorName);
+        });
     }
     
     createBuildingDescription(cityObject) {

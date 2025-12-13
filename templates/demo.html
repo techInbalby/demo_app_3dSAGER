@@ -101,7 +101,7 @@
                 <div class="viewer-header">
                     <h3>3D City Model Viewer</h3>
                     <div class="viewer-controls">
-                        <button class="control-btn" onclick="resetCamera()">Reset</button>
+                        <!-- Reset button removed - camera auto-resets when loading new files -->
                         <button class="control-btn" onclick="toggleFullscreen()">Fullscreen</button>
                     </div>
                 </div>
@@ -137,7 +137,20 @@
         </div>
     </div>
 
-    <!-- Matches Window -->
+    <!-- Classifier Results Summary Window -->
+    <div id="results-summary-window" class="matches-window" style="display: none;">
+        <div class="matches-header">
+            <h3>Classifier Results Summary</h3>
+            <button class="close-btn" onclick="closeResultsSummaryWindow()">×</button>
+        </div>
+        <div class="matches-content">
+            <div id="results-summary-content">
+                <!-- Summary will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Matches Window (kept for backward compatibility, but not used for Step 3) -->
     <div id="matches-window" class="matches-window" style="display: none;">
         <div class="matches-header">
             <h3>Building Matches</h3>
@@ -182,6 +195,14 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay" style="display: none;">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <div class="loading-message" id="loading-message">Processing...</div>
         </div>
     </div>
 

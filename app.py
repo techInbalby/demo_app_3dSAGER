@@ -994,6 +994,196 @@ def get_building_matches(building_id):
         return jsonify({'error': str(e), 'matches': []}), 500
 
 
+@app.route('/api/buildings/status', methods=['GET'])
+def get_all_buildings_status():
+    """
+    Get status for all buildings in the selected file
+    Returns: building_id -> {has_features, has_pairs, match_status}
+    Query params: file (the selected file path)
+    """
+    try:
+        file_path = request.args.get('file', '')
+        if not file_path:
+            return jsonify({'error': 'No file path provided'}), 400
+        
+        print(f"Getting status for all buildings in file: {file_path}")
+        
+        result = {}
+        
+        # 1. Check which buildings have features
+        cache_key = file_path
+        has_features = set()
+        if cache_key in features_cache:
+            has_features = set(features_cache[cache_key].keys())
+        
+        # 2. Check which buildings have BKAFI pairs
+        has_pairs = set()
+        if bkafi_cache is not None:
+            # Get all unique Source_Building_ID values
+            if 'Source_Building_ID' in bkafi_cache.columns:
+                # Extract numeric IDs and store both numeric and full format
+                for bid in bkafi_cache['Source_Building_ID'].unique():
+                    bid_str = str(bid)
+                    has_pairs.add(bid_str)
+                    # Also add numeric version for matching
+                    numeric_match = re.search(r'(\d{10,})', bid_str)
+                    if numeric_match:
+                        has_pairs.add(numeric_match.group(1))
+        
+        # 3. Check match status (true match, false positive, no match)
+        # For each building, check all its pairs to determine overall status
+        match_status = {}  # building_id -> 'true_match', 'false_positive', 'no_match'
+        if bkafi_cache is not None:
+            # Group by Source_Building_ID to check all pairs for each building
+            for source_id, group in bkafi_cache.groupby('Source_Building_ID'):
+                source_id_str = str(source_id)
+                
+                # Check all pairs for this building
+                has_true_match = False
+                has_false_positive = False
+                building_has_pairs = len(group) > 0  # Use different variable name to avoid shadowing outer has_pairs
+                
+                for _, row in group.iterrows():
+                    prediction = int(row['Is_Match_Prediction']) if pd.notna(row['Is_Match_Prediction']) else 0
+                    true_label = int(row['Is_Match_True_Label']) if pd.notna(row['Is_Match_True_Label']) else None
+                    
+                    if prediction == 1:
+                        if true_label == 1:
+                            has_true_match = True
+                        elif true_label == 0:
+                            has_false_positive = True
+                
+                # Determine overall status for this building based on ALL pairs
+                # Priority: true_match > false_positive > no_match
+                # This uses data from results/prediction_results/Hague_matching_BaggingClassifier_seed=1.pkl
+                if has_true_match:
+                    status = 'true_match'  # At least one pair with prediction=1 and true_label=1
+                elif has_false_positive:
+                    status = 'false_positive'  # At least one pair with prediction=1 and true_label=0
+                elif building_has_pairs:
+                    # Has pairs but all predictions are 0, or prediction=1 with unknown true_label
+                    status = 'no_match'
+                else:
+                    status = None  # No pairs at all - keep previous stage color
+                
+                # Store for both full ID and numeric ID
+                numeric_match = re.search(r'(\d{10,})', source_id_str)
+                numeric_id = numeric_match.group(1) if numeric_match else None
+                
+                if status:
+                    match_status[source_id_str] = status
+                    if numeric_id:
+                        match_status[numeric_id] = status
+        
+        # Combine all building IDs
+        all_building_ids = has_features.union(has_pairs).union(match_status.keys())
+        
+        # Build result
+        for building_id in all_building_ids:
+            building_id_str = str(building_id)
+            result[building_id_str] = {
+                'has_features': building_id_str in has_features,
+                'has_pairs': building_id_str in has_pairs,
+                'match_status': match_status.get(building_id_str, None)
+            }
+        
+        return jsonify({
+            'success': True,
+            'buildings': result,
+            'total': len(result)
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"Error getting building status: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/classifier/summary', methods=['GET'])
+def get_classifier_summary():
+    """
+    Get classifier results summary with success rates
+    Query params: file (the selected file path)
+    """
+    try:
+        file_path = request.args.get('file', '')
+        if not file_path:
+            return jsonify({'error': 'No file path provided'}), 400
+        
+        print(f"Getting classifier summary for file: {file_path}")
+        
+        # Initialize counters
+        total_buildings = 0
+        true_positive = 0
+        false_positive = 0
+        false_negative = 0
+        no_pairs_but_exists = 0
+        
+        # Get all building IDs from the loaded file (if available)
+        # For now, we'll use BKAFI cache to determine total buildings
+        if bkafi_cache is not None and 'Source_Building_ID' in bkafi_cache.columns:
+            unique_buildings = set(str(bid) for bid in bkafi_cache['Source_Building_ID'].unique())
+            total_buildings = len(unique_buildings)
+            
+            # Count match types - count each pair (not each building)
+            # True positive: prediction=1 and true_label=1
+            # False positive: prediction=1 and true_label=0
+            # False negative: prediction=0 and true_label=1
+            for _, row in bkafi_cache.iterrows():
+                prediction = int(row['Is_Match_Prediction']) if pd.notna(row['Is_Match_Prediction']) else 0
+                true_label = int(row['Is_Match_True_Label']) if pd.notna(row['Is_Match_True_Label']) else None
+                
+                if prediction == 1 and true_label == 1:
+                    true_positive += 1
+                elif prediction == 1 and true_label == 0:
+                    false_positive += 1
+                elif prediction == 0 and true_label == 1:
+                    false_negative += 1
+        
+        # Calculate success rate
+        total_pairs = true_positive + false_positive + false_negative
+        success_rate = true_positive / total_pairs if total_pairs > 0 else 0
+        
+        # Calculate percentage of buildings with no pairs but right one exists in index
+        # NOTE: This is currently using mock data - replace with actual data when available
+        buildings_with_pairs = set()
+        if bkafi_cache is not None and 'Source_Building_ID' in bkafi_cache.columns:
+            buildings_with_pairs = set(str(bid) for bid in bkafi_cache['Source_Building_ID'].unique())
+        
+        # Mock: assume 10% of buildings without pairs have the right match in index
+        # TODO: Replace with actual data from provided file
+        no_pairs_count = max(0, total_buildings - len(buildings_with_pairs))
+        no_pairs_but_exists = int(no_pairs_count * 0.1)  # Mock: 10% of no-pair buildings
+        no_pairs_percentage = no_pairs_but_exists / total_buildings if total_buildings > 0 else 0
+        
+        # Mark which fields are mock data
+        is_mock = {
+            'no_pairs_but_exists': True,  # This is mock data
+            'no_pairs_percentage': True   # This is mock data
+        }
+        
+        summary = {
+            'total_buildings': total_buildings,
+            'true_positive': true_positive,
+            'false_positive': false_positive,
+            'false_negative': false_negative,
+            'no_pairs_but_exists': no_pairs_but_exists,
+            'success_rate': success_rate,
+            'no_pairs_percentage': no_pairs_percentage,
+            'is_mock': is_mock  # Indicate which fields are mock data
+        }
+        
+        return jsonify({
+            'success': True,
+            'summary': summary
+        })
+        
+    except Exception as e:
+        import traceback
+        print(f"Error getting classifier summary: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/health')
 def health():
     """Health check endpoint"""

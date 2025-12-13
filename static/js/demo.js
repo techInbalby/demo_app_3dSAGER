@@ -9,6 +9,7 @@ let featuresLoaded = false; // Track if features have been calculated for curren
 let bkafiLoaded = false; // Track if BKAFI results have been loaded
 let buildingFeaturesCache = {}; // Cache features for all buildings
 let buildingBkafiCache = {}; // Cache BKAFI pairs for buildings
+let buildingStatusCache = null; // Cache building status to avoid repeated API calls
 let pipelineState = {
     step1Completed: false, // Geometric Featurization
     step2Completed: false, // BKAFI Blocking
@@ -77,6 +78,7 @@ function selectFile(filePath, source) {
     if (source === 'A') {
         resetPipelineState();
         selectedFile = filePath; // Store selected file for pipeline steps
+        buildingStatusCache = null; // Clear cache when selecting new file
         // Enable step 1 button when candidates file is selected
         document.getElementById('step-btn-1').disabled = false;
     }
@@ -112,8 +114,33 @@ function resetPipelineState() {
     selectedBuildingData = null;
     featuresLoaded = false;
     bkafiLoaded = false;
+    buildingStatusCache = null; // Clear cache when resetting
     buildingFeaturesCache = {};
     buildingBkafiCache = {};
+    
+    // Reset sidebar buttons to initial state
+    const stepBtn1 = document.getElementById('step-btn-1');
+    const stepBtn2 = document.getElementById('step-btn-2');
+    const stepBtn3 = document.getElementById('step-btn-3');
+    
+    if (stepBtn1) {
+        stepBtn1.textContent = 'Calculate Features';
+        stepBtn1.style.background = '#667eea';
+        stepBtn1.disabled = false; // Enable for new file
+    }
+    
+    if (stepBtn2) {
+        stepBtn2.textContent = 'Run BKAFI';
+        stepBtn2.style.background = '#667eea';
+        stepBtn2.disabled = true; // Disable until step 1 is completed
+    }
+    
+    if (stepBtn3) {
+        stepBtn3.textContent = 'Run Classifier';
+        stepBtn3.style.background = '#667eea';
+        stepBtn3.disabled = true; // Disable until step 2 is completed
+    }
+    
     updatePipelineUI();
 }
 
@@ -402,6 +429,9 @@ function calculateGeometricFeatures() {
         calcBtn.disabled = true;
     }
     
+    // Show loading overlay
+    showLoading('Calculating geometric features for all buildings...');
+    
     // Call API to calculate features for all buildings
     fetch('/api/features/calculate', {
         method: 'POST',
@@ -412,6 +442,7 @@ function calculateGeometricFeatures() {
         .then(data => {
             if (data.error) {
                 console.error('Error calculating features:', data.error);
+                hideLoading();
                 alert('Error calculating geometric features: ' + data.error);
                 stepBtn.textContent = 'Calculate Features';
                 stepBtn.disabled = false;
@@ -424,6 +455,9 @@ function calculateGeometricFeatures() {
             
             console.log('Features calculated:', data.message);
             
+            // Update loading message
+            showLoading('Updating building colors...');
+            
             // Mark step 1 as completed
             pipelineState.step1Completed = true;
             featuresLoaded = true;
@@ -434,6 +468,16 @@ function calculateGeometricFeatures() {
             
             stepBtn.textContent = 'Completed';
             stepBtn.style.background = '#28a745';
+            
+            // Update building colors based on features (use cached data if available, otherwise fetch)
+            updateBuildingColorsForStage1(true, () => {
+                // After bulk update, specifically update the selected building if properties window is open
+                if (selectedBuildingId) {
+                    updateSelectedBuildingColor();
+                }
+                // Hide loading when color update completes
+                hideLoading();
+            });
             
             // If building properties window is open, show features
             if (selectedBuildingId) {
@@ -447,6 +491,7 @@ function calculateGeometricFeatures() {
         })
         .catch(error => {
             console.error('Error calculating features:', error);
+            hideLoading();
             alert('Error calculating geometric features: ' + error.message);
             stepBtn.textContent = 'Calculate Features';
             stepBtn.disabled = false;
@@ -626,6 +671,9 @@ function runBKAFI() {
     stepBtn.textContent = 'Loading...';
     stepBtn.disabled = true;
     
+    // Show loading overlay
+    showLoading('Loading BKAFI results...');
+    
     // Call API to load BKAFI results from pkl file
     fetch('/api/bkafi/load', {
         method: 'POST',
@@ -635,6 +683,7 @@ function runBKAFI() {
         .then(data => {
             if (data.error) {
                 console.error('Error loading BKAFI results:', data.error);
+                hideLoading();
                 alert('Error loading BKAFI results: ' + data.error);
                 stepBtn.textContent = 'Run BKAFI';
                 stepBtn.disabled = false;
@@ -642,6 +691,9 @@ function runBKAFI() {
             }
             
             console.log('BKAFI results loaded:', data.message);
+            
+            // Update loading message
+            showLoading('Updating building colors...');
             
             // Mark step 2 as completed
             pipelineState.step2Completed = true;
@@ -653,6 +705,16 @@ function runBKAFI() {
             
             stepBtn.textContent = 'Completed';
             stepBtn.style.background = '#28a745';
+            
+            // Update building colors based on BKAFI pairs (use cached data if available)
+            updateBuildingColorsForStage2(true, () => {
+                // After bulk update, specifically update the selected building if properties window is open
+                if (selectedBuildingId) {
+                    updateSelectedBuildingColor();
+                }
+                // Hide loading when color update completes
+                hideLoading();
+            });
             
             // Update BKAFI button in properties window if open
             const bkafiBtn = document.getElementById('run-bkafi-btn');
@@ -669,6 +731,7 @@ function runBKAFI() {
         })
         .catch(error => {
             console.error('Error loading BKAFI results:', error);
+            hideLoading();
             alert('Error loading BKAFI results: ' + error.message);
             stepBtn.textContent = 'Run BKAFI';
             stepBtn.disabled = false;
@@ -1583,39 +1646,64 @@ function closeBkafiComparisonWindow() {
     }
 }
 
-// View results (Step 3)
+// View results (Step 3) - Show summary instead of individual matches
 function viewResults() {
     if (!pipelineState.step2Completed) {
         alert('Please complete BKAFI Blocking first.');
         return;
     }
     
-    console.log('Viewing results for building:', selectedBuildingId);
+    console.log('Loading classifier results summary');
     
-    // Load matches and show in matches window
-    fetch(`/api/building/matches/${selectedBuildingId}?file=${encodeURIComponent(selectedFile)}`)
+    const stepBtn = document.getElementById('step-btn-3');
+    stepBtn.textContent = 'Loading...';
+    stepBtn.disabled = true;
+    
+    // Show loading overlay
+    showLoading('Loading classifier results and updating colors...');
+    
+    // Load results summary
+    fetch(`/api/classifier/summary?file=${encodeURIComponent(selectedFile)}`)
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                console.error('Error loading matches:', data.error);
-                alert('Error loading matches: ' + data.error);
+                console.error('Error loading summary:', data.error);
+                hideLoading();
+                alert('Error loading classifier results summary: ' + data.error);
+                stepBtn.textContent = 'Run Classifier';
+                stepBtn.disabled = false;
                 return;
             }
+            
+            // Update loading message
+            showLoading('Updating building colors...');
             
             // Mark step 3 as completed
             pipelineState.step3Completed = true;
             updatePipelineUI();
             
-            // Show matches window
-            showBuildingMatches(
-                selectedBuildingId,
-                selectedBuildingData?.attributes?.name || selectedBuildingId,
-                data.matches || []
-            );
+            // Update building colors based on match status (use cached data if available)
+            updateBuildingColorsForStage3(true, () => {
+                // After bulk update, specifically update the selected building if properties window is open
+                if (selectedBuildingId) {
+                    updateSelectedBuildingColor();
+                }
+                // Hide loading when color update completes
+                hideLoading();
+                
+                // Show results summary window
+                showClassifierResultsSummary(data);
+            });
+            
+            stepBtn.textContent = 'Completed';
+            stepBtn.style.background = '#28a745';
         })
         .catch(error => {
-            console.error('Error loading matches:', error);
-            alert('Error loading matches: ' + error.message);
+            console.error('Error loading summary:', error);
+            hideLoading();
+            alert('Error loading classifier results summary: ' + error.message);
+            stepBtn.textContent = 'Run Classifier';
+            stepBtn.disabled = false;
         });
 }
 
@@ -1653,6 +1741,297 @@ function updatePipelineUI() {
         step3Status.innerHTML = '';
         step3Status.className = 'step-status';
     }
+}
+
+// Helper function to extract numeric ID from building ID
+function extractNumericId(buildingId) {
+    const match = buildingId.match(/(\d{10,})/);
+    return match ? match[1] : buildingId;
+}
+
+// Show loading overlay with message
+function showLoading(message = 'Processing...') {
+    const overlay = document.getElementById('loading-overlay');
+    const messageEl = document.getElementById('loading-message');
+    if (overlay && messageEl) {
+        messageEl.textContent = message;
+        overlay.style.display = 'flex';
+    }
+}
+
+// Hide loading overlay
+function hideLoading() {
+    const overlay = document.getElementById('loading-overlay');
+    if (overlay) {
+        overlay.style.display = 'none';
+    }
+}
+
+// Update the selected building's color based on current pipeline state
+function updateSelectedBuildingColor() {
+    if (!selectedBuildingId || !selectedFile || !window.viewer) {
+        return;
+    }
+    
+    // Use cached status if available
+    getBuildingStatus(false)
+        .then(data => {
+            const status = findBuildingStatus(selectedBuildingId, data.buildings);
+            
+            if (status) {
+                let colorName = 'blue'; // Default
+                
+                // Determine color based on pipeline stage
+                if (pipelineState.step3Completed && status.match_status) {
+                    if (status.match_status === 'true_match') {
+                        colorName = 'green';
+                    } else if (status.match_status === 'false_positive') {
+                        colorName = 'red';
+                    } else if (status.match_status === 'no_match') {
+                        colorName = 'darkgray';
+                    }
+                } else if (pipelineState.step2Completed && status.has_pairs) {
+                    colorName = 'yellow';
+                } else if (pipelineState.step1Completed && status.has_features) {
+                    colorName = 'orange';
+                }
+                
+                // Update the building color
+                window.viewer.updateBuildingColor(selectedBuildingId, colorName);
+                console.log(`Updated selected building ${selectedBuildingId} to color: ${colorName}`);
+            } else {
+                console.warn(`No status found for selected building: ${selectedBuildingId}`);
+            }
+        })
+        .catch(error => {
+            console.error('Error updating selected building color:', error);
+        });
+}
+
+// Helper function to get building status (with caching)
+function getBuildingStatus(forceRefresh = false) {
+    return new Promise((resolve, reject) => {
+        // Use cache if available and not forcing refresh
+        if (buildingStatusCache && !forceRefresh) {
+            resolve(buildingStatusCache);
+            return;
+        }
+        
+        if (!selectedFile) {
+            reject(new Error('No file selected'));
+            return;
+        }
+        
+        fetch(`/api/buildings/status?file=${encodeURIComponent(selectedFile)}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    reject(new Error(data.error));
+                    return;
+                }
+                // Cache the result
+                buildingStatusCache = data;
+                resolve(data);
+            })
+            .catch(reject);
+    });
+}
+
+// Helper function to match building IDs
+function findBuildingStatus(viewerBuildingId, statusMap) {
+    const numericId = extractNumericId(viewerBuildingId);
+    // Try multiple matching strategies
+    let status = statusMap[viewerBuildingId] || statusMap[numericId];
+    
+    // Also try matching with "bag_" prefix
+    if (!status && viewerBuildingId.startsWith('bag_')) {
+        status = statusMap[viewerBuildingId.replace('bag_', '')] || statusMap[numericId];
+    }
+    
+    // Try reverse: if statusMap has "bag_" prefix, match with viewer ID without prefix
+    if (!status) {
+        for (const [statusKey, statusValue] of Object.entries(statusMap)) {
+            const statusNumericId = extractNumericId(statusKey);
+            if (statusNumericId === numericId || statusNumericId === viewerBuildingId) {
+                status = statusValue;
+                break;
+            }
+        }
+    }
+    
+    return status;
+}
+
+// Update building colors based on pipeline stages
+function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) {
+    // Stage 1: Geometric Featurization
+    // Buildings with features -> orange, without -> blue
+    if (!selectedFile || !window.viewer) {
+        console.warn('Cannot update colors: no file selected or viewer not available');
+        if (onComplete) onComplete();
+        return;
+    }
+    
+    const startTime = performance.now();
+    
+    getBuildingStatus(forceRefresh)
+        .then(data => {
+            const buildingColors = {};
+            // Create a map of numeric ID -> status for easier matching
+            const statusMap = {};
+            Object.entries(data.buildings).forEach(([buildingId, status]) => {
+                const numericId = extractNumericId(buildingId);
+                statusMap[numericId] = status;
+                statusMap[buildingId] = status; // Also store original ID
+            });
+            
+            // Update colors for ALL buildings in the viewer
+            if (window.viewer && window.viewer.buildingEntities) {
+                window.viewer.buildingEntities.forEach((entities, viewerBuildingId) => {
+                    const status = findBuildingStatus(viewerBuildingId, statusMap);
+                    if (status) {
+                        buildingColors[viewerBuildingId] = status.has_features ? 'orange' : 'blue';
+                    } else {
+                        buildingColors[viewerBuildingId] = 'blue'; // Default
+                    }
+                });
+            }
+            
+            if (Object.keys(buildingColors).length > 0) {
+                window.viewer.updateBuildingColors(buildingColors);
+                const endTime = performance.now();
+                console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 1) in ${(endTime - startTime).toFixed(2)}ms`);
+            }
+            
+            if (onComplete) onComplete();
+        })
+        .catch(error => {
+            console.error('Error updating building colors for Stage 1:', error);
+            if (onComplete) onComplete();
+        });
+}
+
+function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) {
+    // Stage 2: BKAFI Blocking
+    // Buildings with pairs -> yellow
+    if (!selectedFile || !window.viewer) {
+        console.warn('Cannot update colors: no file selected or viewer not available');
+        if (onComplete) onComplete();
+        return;
+    }
+    
+    const startTime = performance.now();
+    
+    getBuildingStatus(forceRefresh)
+        .then(data => {
+            const buildingColors = {};
+            // Create a map of numeric ID -> status for easier matching
+            const statusMap = {};
+            Object.entries(data.buildings).forEach(([buildingId, status]) => {
+                const numericId = extractNumericId(buildingId);
+                statusMap[numericId] = status;
+                statusMap[buildingId] = status; // Also store original ID
+            });
+            
+            // Update colors for ALL buildings in the viewer (including selected building)
+            if (window.viewer && window.viewer.buildingEntities) {
+                window.viewer.buildingEntities.forEach((entities, viewerBuildingId) => {
+                    const status = findBuildingStatus(viewerBuildingId, statusMap);
+                    if (status) {
+                        if (status.has_pairs) {
+                            buildingColors[viewerBuildingId] = 'yellow';
+                        } else {
+                            // Keep previous color (orange if has features, blue if not)
+                            buildingColors[viewerBuildingId] = status.has_features ? 'orange' : 'blue';
+                        }
+                    } else {
+                        buildingColors[viewerBuildingId] = 'blue'; // Default
+                    }
+                });
+            }
+            
+            if (Object.keys(buildingColors).length > 0) {
+                window.viewer.updateBuildingColors(buildingColors);
+                const endTime = performance.now();
+                console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 2) in ${(endTime - startTime).toFixed(2)}ms`);
+                
+                // Log if selected building was updated
+                if (selectedBuildingId && buildingColors[selectedBuildingId]) {
+                    console.log(`Selected building ${selectedBuildingId} colored to: ${buildingColors[selectedBuildingId]}`);
+                } else if (selectedBuildingId) {
+                    console.warn(`Selected building ${selectedBuildingId} not found in buildingColors map`);
+                }
+            }
+            
+            if (onComplete) onComplete();
+        })
+        .catch(error => {
+            console.error('Error updating building colors for Stage 2:', error);
+            if (onComplete) onComplete();
+        });
+}
+
+function updateBuildingColorsForStage3(forceRefresh = false, onComplete = null) {
+    // Stage 3: Matching Classifier
+    // True match -> green, false positive -> red, no match -> dark gray
+    if (!selectedFile || !window.viewer) {
+        console.warn('Cannot update colors: no file selected or viewer not available');
+        if (onComplete) onComplete();
+        return;
+    }
+    
+    const startTime = performance.now();
+    
+    getBuildingStatus(forceRefresh)
+        .then(data => {
+            const buildingColors = {};
+            // Create a map of numeric ID -> status for easier matching
+            const statusMap = {};
+            Object.entries(data.buildings).forEach(([buildingId, status]) => {
+                const numericId = extractNumericId(buildingId);
+                statusMap[numericId] = status;
+                statusMap[buildingId] = status; // Also store original ID
+            });
+            
+            // Update colors for ALL buildings in the viewer
+            if (window.viewer && window.viewer.buildingEntities) {
+                window.viewer.buildingEntities.forEach((entities, viewerBuildingId) => {
+                    const status = findBuildingStatus(viewerBuildingId, statusMap);
+                    if (status) {
+                        if (status.match_status === 'true_match') {
+                            buildingColors[viewerBuildingId] = 'green';
+                        } else if (status.match_status === 'false_positive') {
+                            buildingColors[viewerBuildingId] = 'red';
+                        } else if (status.match_status === 'no_match') {
+                            buildingColors[viewerBuildingId] = 'darkgray';
+                        } else {
+                            // No match status yet, keep previous color
+                            if (status.has_pairs) {
+                                buildingColors[viewerBuildingId] = 'yellow';
+                            } else if (status.has_features) {
+                                buildingColors[viewerBuildingId] = 'orange';
+                            } else {
+                                buildingColors[viewerBuildingId] = 'blue';
+                            }
+                        }
+                    } else {
+                        buildingColors[viewerBuildingId] = 'blue'; // Default
+                    }
+                });
+            }
+            
+            if (Object.keys(buildingColors).length > 0) {
+                window.viewer.updateBuildingColors(buildingColors);
+                const endTime = performance.now();
+                console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 3) in ${(endTime - startTime).toFixed(2)}ms`);
+            }
+            
+            if (onComplete) onComplete();
+        })
+        .catch(error => {
+            console.error('Error updating building colors for Stage 3:', error);
+            if (onComplete) onComplete();
+        });
 }
 
 // Viewer controls
@@ -1724,6 +2103,102 @@ function showBuildingMatches(buildingId, buildingName, matches) {
         document.body.appendChild(overlay);
     }
     overlay.classList.add('active');
+}
+
+// Show classifier results summary
+function showClassifierResultsSummary(data) {
+    const summaryWindow = document.getElementById('results-summary-window');
+    const summaryContent = document.getElementById('results-summary-content');
+    
+    if (!summaryWindow || !summaryContent) {
+        console.error('Results summary window elements not found');
+        return;
+    }
+    
+    // Clear previous content
+    summaryContent.innerHTML = '';
+    
+    // Create summary display
+    const summary = data.summary || {
+        total_buildings: 0,
+        true_positive: 0,
+        false_positive: 0,
+        false_negative: 0,
+        no_pairs_but_exists: 0,
+        success_rate: 0,
+        no_pairs_percentage: 0
+    };
+    
+    const summaryHTML = `
+        <div style="padding: 20px;">
+            <h4 style="margin-top: 0; color: #667eea;">Overall Success Rate</h4>
+            <div style="font-size: 32px; font-weight: bold; color: #28a745; margin: 10px 0 5px 0;">
+                ${(summary.success_rate * 100).toFixed(2)}%
+            </div>
+            <div style="font-size: 12px; color: #666; margin-bottom: 20px; font-style: italic;">
+                * Based on true positive / (true positive + false positive + false negative)
+            </div>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
+                <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; border-left: 4px solid #4caf50;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">True Positive Pairs</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #4caf50;">${summary.true_positive}</div>
+                </div>
+                
+                <div style="background: #ffebee; padding: 15px; border-radius: 8px; border-left: 4px solid #f44336;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">False Positive Pairs</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #f44336;">${summary.false_positive}</div>
+                </div>
+                
+                <div style="background: #fff3e0; padding: 15px; border-radius: 8px; border-left: 4px solid #ff9800;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">False Negative Pairs</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${summary.false_negative}</div>
+                </div>
+                
+                <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">No Pairs (but exists in index)</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #2196f3;">${summary.no_pairs_but_exists}</div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">${(summary.no_pairs_percentage * 100).toFixed(2)}% of total</div>
+                    <div style="font-size: 11px; color: #f44336; margin-top: 5px; font-style: italic;">* Mock data - replace with actual data</div>
+                </div>
+            </div>
+            
+            <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-top: 20px;">
+                <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Total Buildings Analyzed</div>
+                <div style="font-size: 20px; font-weight: bold; color: #333;">${summary.total_buildings}</div>
+            </div>
+        </div>
+    `;
+    
+    summaryContent.innerHTML = summaryHTML;
+    
+    // Show the window
+    summaryWindow.style.display = 'block';
+    
+    // Add overlay
+    let overlay = document.getElementById('results-summary-overlay');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.id = 'results-summary-overlay';
+        overlay.className = 'matches-overlay';
+        overlay.onclick = closeResultsSummaryWindow;
+        document.body.appendChild(overlay);
+    }
+    overlay.classList.add('active');
+}
+
+// Close results summary window
+function closeResultsSummaryWindow() {
+    const summaryWindow = document.getElementById('results-summary-window');
+    const overlay = document.getElementById('results-summary-overlay');
+    
+    if (summaryWindow) {
+        summaryWindow.style.display = 'none';
+    }
+    
+    if (overlay) {
+        overlay.classList.remove('active');
+    }
 }
 
 // Close matches window
