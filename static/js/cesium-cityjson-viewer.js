@@ -1,12 +1,23 @@
 // Cesium CityJSON Viewer with Clickable Buildings
 // Converts CityJSON to Cesium entities with geospatial positioning
 
+// Color map constant - don't recreate on every call
+const BUILDING_COLOR_MAP = {
+    'blue': Cesium.Color.fromBytes(116, 151, 223, 255),      // Default blue
+    'orange': Cesium.Color.fromBytes(255, 152, 0, 255),      // Orange - has features
+    'yellow': Cesium.Color.fromBytes(255, 235, 59, 255),     // Yellow - has BKAFI pairs
+    'green': Cesium.Color.fromBytes(76, 175, 80, 255),       // Green - true match
+    'red': Cesium.Color.fromBytes(244, 67, 54, 255),         // Red - false positive
+    'darkgray': Cesium.Color.fromBytes(97, 97, 97, 255)      // Dark gray - no match
+};
+
 class CesiumCityJSONViewer {
     constructor(containerId, options = {}) {
         this.container = document.getElementById(containerId);
         this.viewer = null;
         this.cityObjects = {};
         this.buildingEntities = new Map(); // Store building entities for click handling
+        this.idMapping = new Map(); // Pre-computed ID mapping for fast lookups: numericId -> [all variations]
         this.isInitialized = false;
         this.boundingBox = null; // Store bounding box for camera fitting
         this.crs = null; // Store coordinate reference system from metadata
@@ -682,6 +693,8 @@ class CesiumCityJSONViewer {
             // Store entity for click handling
             if (!this.buildingEntities.has(objectId)) {
                 this.buildingEntities.set(objectId, []);
+                // Pre-compute ID mapping for fast lookups
+                this._updateIdMapping(objectId);
             }
             this.buildingEntities.get(objectId).push(entity);
             
@@ -860,84 +873,139 @@ class CesiumCityJSONViewer {
     }
     
     /**
-     * Update building color based on pipeline stage
-     * @param {string} buildingId - Building ID to update
-     * @param {string} colorName - Color name: 'blue', 'orange', 'yellow', 'green', 'red', 'darkgray'
+     * Update ID mapping for fast lookups
+     * @private
      */
-    updateBuildingColor(buildingId, colorName) {
-        const colorMap = {
-            'blue': Cesium.Color.fromBytes(116, 151, 223, 255),      // Default blue
-            'orange': Cesium.Color.fromBytes(255, 152, 0, 255),      // Orange - has features
-            'yellow': Cesium.Color.fromBytes(255, 235, 59, 255),       // Yellow - has BKAFI pairs
-            'green': Cesium.Color.fromBytes(76, 175, 80, 255),        // Green - true match
-            'red': Cesium.Color.fromBytes(244, 67, 54, 255),          // Red - false positive
-            'darkgray': Cesium.Color.fromBytes(97, 97, 97, 255)       // Dark gray - no match
-        };
-        
-        const newColor = colorMap[colorName] || colorMap['blue'];
-        
-        // Try multiple ID formats to find the building
-        let entities = this.buildingEntities.get(buildingId);
-        
-        // If not found, try extracting numeric ID
-        if (!entities || entities.length === 0) {
-            const numericMatch = buildingId.match(/(\d{10,})/);
-            if (numericMatch) {
-                const numericId = numericMatch[1];
-                // Try numeric ID
-                entities = this.buildingEntities.get(numericId);
-                // Try with bag_ prefix
-                if (!entities || entities.length === 0) {
-                    entities = this.buildingEntities.get(`bag_${numericId}`);
-                }
+    _updateIdMapping(objectId) {
+        const numericMatch = objectId.match(/(\d{10,})/);
+        if (numericMatch) {
+            const numericId = numericMatch[1];
+            if (!this.idMapping.has(numericId)) {
+                this.idMapping.set(numericId, []);
+            }
+            this.idMapping.get(numericId).push(objectId);
+            // Also add variations
+            if (objectId.startsWith('bag_')) {
+                this.idMapping.get(numericId).push(objectId.replace('bag_', ''));
+            } else {
+                this.idMapping.get(numericId).push(`bag_${objectId}`);
             }
         }
+    }
+    
+    /**
+     * Fast lookup of entities by any ID variation
+     * @private
+     */
+    _findEntitiesById(buildingId) {
+        // Direct lookup first (fastest)
+        let entities = this.buildingEntities.get(buildingId);
+        if (entities && entities.length > 0) {
+            return entities;
+        }
         
-        // If still not found, try searching all keys
-        if (!entities || entities.length === 0) {
-            const numericMatch = buildingId.match(/(\d{10,})/);
-            if (numericMatch) {
-                const numericId = numericMatch[1];
-                // Search through all keys to find a match
-                for (const [key, value] of this.buildingEntities.entries()) {
-                    const keyNumericMatch = key.match(/(\d{10,})/);
-                    if (keyNumericMatch && keyNumericMatch[1] === numericId) {
-                        entities = value;
-                        console.log(`Found building by numeric ID match: ${key} matches ${buildingId}`);
-                        break;
+        // Use pre-computed ID mapping
+        const numericMatch = buildingId.match(/(\d{10,})/);
+        if (numericMatch) {
+            const numericId = numericMatch[1];
+            const idVariations = this.idMapping.get(numericId);
+            if (idVariations) {
+                for (const variation of idVariations) {
+                    entities = this.buildingEntities.get(variation);
+                    if (entities && entities.length > 0) {
+                        return entities;
                     }
                 }
             }
         }
         
+        return null;
+    }
+    
+    /**
+     * Update building color based on pipeline stage
+     * @param {string} buildingId - Building ID to update
+     * @param {string} colorName - Color name: 'blue', 'orange', 'yellow', 'green', 'red', 'darkgray'
+     */
+    updateBuildingColor(buildingId, colorName) {
+        const newColor = BUILDING_COLOR_MAP[colorName] || BUILDING_COLOR_MAP['blue'];
+        
+        // Fast lookup using pre-computed mapping
+        const entities = this._findEntitiesById(buildingId);
+        
         if (entities && entities.length > 0) {
             entities.forEach(entity => {
                 if (entity.polygon) {
                     // Always update the originalMaterial reference to the new color
-                    // This ensures that when highlight resets, it uses the correct color
                     entity.originalMaterial = newColor;
-                    
-                    // Update the current material (even if it's currently highlighted)
-                    // If it's highlighted, the highlight will reset to the new color after timeout
+                    // Update the current material
                     entity.polygon.material = newColor;
                 }
             });
-            console.log(`Updated color for building ${buildingId} to ${colorName}`);
             return true;
-        } else {
-            console.warn(`Building ${buildingId} not found in entities map. Available keys:`, Array.from(this.buildingEntities.keys()).slice(0, 10));
-            return false;
         }
+        
+        return false;
     }
     
     /**
-     * Update colors for multiple buildings at once
+     * Update colors for multiple buildings at once (optimized batch update)
      * @param {Object} buildingColors - Map of buildingId -> colorName
+     * @returns {Promise} Resolves when all color updates are complete
      */
     updateBuildingColors(buildingColors) {
-        console.log(`Updating colors for ${Object.keys(buildingColors).length} buildings`);
-        Object.entries(buildingColors).forEach(([buildingId, colorName]) => {
-            this.updateBuildingColor(buildingId, colorName);
+        return new Promise((resolve) => {
+            const totalBuildings = Object.keys(buildingColors).length;
+            if (totalBuildings === 0) {
+                resolve();
+                return;
+            }
+            
+            const updates = [];
+            
+            // Collect all updates
+            Object.entries(buildingColors).forEach(([buildingId, colorName]) => {
+                const newColor = BUILDING_COLOR_MAP[colorName] || BUILDING_COLOR_MAP['blue'];
+                const entities = this._findEntitiesById(buildingId);
+                if (entities && entities.length > 0) {
+                    updates.push({ entities, color: newColor });
+                }
+            });
+            
+            if (updates.length === 0) {
+                resolve();
+                return;
+            }
+            
+            // Batch update using requestAnimationFrame to avoid blocking UI
+            const BATCH_SIZE = 200; // Increased batch size for better performance
+            let index = 0;
+            
+            const updateBatch = () => {
+                const endIndex = Math.min(index + BATCH_SIZE, updates.length);
+                
+                for (let i = index; i < endIndex; i++) {
+                    const { entities, color } = updates[i];
+                    entities.forEach(entity => {
+                        if (entity.polygon) {
+                            entity.originalMaterial = color;
+                            entity.polygon.material = color;
+                        }
+                    });
+                }
+                
+                index = endIndex;
+                
+                if (index < updates.length) {
+                    requestAnimationFrame(updateBatch);
+                } else {
+                    // All batches complete - resolve the promise
+                    resolve();
+                }
+            };
+            
+            // Start batch processing
+            requestAnimationFrame(updateBatch);
         });
     }
     
@@ -1004,6 +1072,7 @@ class CesiumCityJSONViewer {
             });
         });
         this.buildingEntities.clear();
+        this.idMapping.clear(); // Clear ID mapping cache
         this.cityObjects = {};
         this.boundingBox = null;
         this.crs = null;

@@ -1837,29 +1837,59 @@ function getBuildingStatus(forceRefresh = false) {
     });
 }
 
-// Helper function to match building IDs
-function findBuildingStatus(viewerBuildingId, statusMap) {
-    const numericId = extractNumericId(viewerBuildingId);
-    // Try multiple matching strategies
-    let status = statusMap[viewerBuildingId] || statusMap[numericId];
+// Pre-compute status map with all ID variations for fast lookups
+function buildOptimizedStatusMap(data) {
+    const statusMap = {};
+    const numericMap = {};
     
-    // Also try matching with "bag_" prefix
-    if (!status && viewerBuildingId.startsWith('bag_')) {
-        status = statusMap[viewerBuildingId.replace('bag_', '')] || statusMap[numericId];
-    }
-    
-    // Try reverse: if statusMap has "bag_" prefix, match with viewer ID without prefix
-    if (!status) {
-        for (const [statusKey, statusValue] of Object.entries(statusMap)) {
-            const statusNumericId = extractNumericId(statusKey);
-            if (statusNumericId === numericId || statusNumericId === viewerBuildingId) {
-                status = statusValue;
-                break;
-            }
+    // Build maps with all ID variations upfront
+    Object.entries(data.buildings).forEach(([buildingId, status]) => {
+        const numericId = extractNumericId(buildingId);
+        
+        // Store by original ID
+        statusMap[buildingId] = status;
+        
+        // Store by numeric ID
+        if (numericId !== buildingId) {
+            statusMap[numericId] = status;
+            numericMap[numericId] = status;
         }
+        
+        // Store variations with bag_ prefix
+        if (buildingId.startsWith('bag_')) {
+            const withoutPrefix = buildingId.replace('bag_', '');
+            statusMap[withoutPrefix] = status;
+        } else {
+            statusMap[`bag_${buildingId}`] = status;
+        }
+    });
+    
+    return { statusMap, numericMap };
+}
+
+// Helper function to match building IDs (optimized with pre-computed map)
+function findBuildingStatus(viewerBuildingId, statusMap) {
+    // Fast direct lookup
+    let status = statusMap[viewerBuildingId];
+    if (status) return status;
+    
+    // Try numeric ID
+    const numericId = extractNumericId(viewerBuildingId);
+    if (numericId !== viewerBuildingId) {
+        status = statusMap[numericId];
+        if (status) return status;
     }
     
-    return status;
+    // Try bag_ prefix variations
+    if (viewerBuildingId.startsWith('bag_')) {
+        status = statusMap[viewerBuildingId.replace('bag_', '')];
+        if (status) return status;
+    } else {
+        status = statusMap[`bag_${viewerBuildingId}`];
+        if (status) return status;
+    }
+    
+    return null;
 }
 
 // Update building colors based on pipeline stages
@@ -1874,16 +1904,11 @@ function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) 
     
     const startTime = performance.now();
     
-    getBuildingStatus(forceRefresh)
+    return getBuildingStatus(forceRefresh)
         .then(data => {
             const buildingColors = {};
-            // Create a map of numeric ID -> status for easier matching
-            const statusMap = {};
-            Object.entries(data.buildings).forEach(([buildingId, status]) => {
-                const numericId = extractNumericId(buildingId);
-                statusMap[numericId] = status;
-                statusMap[buildingId] = status; // Also store original ID
-            });
+            // Pre-compute status map with all ID variations (optimized)
+            const { statusMap } = buildOptimizedStatusMap(data);
             
             // Update colors for ALL buildings in the viewer
             if (window.viewer && window.viewer.buildingEntities) {
@@ -1898,12 +1923,16 @@ function updateBuildingColorsForStage1(forceRefresh = false, onComplete = null) 
             }
             
             if (Object.keys(buildingColors).length > 0) {
-                window.viewer.updateBuildingColors(buildingColors);
-                const endTime = performance.now();
-                console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 1) in ${(endTime - startTime).toFixed(2)}ms`);
+                // Wait for color updates to complete before calling onComplete
+                return window.viewer.updateBuildingColors(buildingColors).then(() => {
+                    const endTime = performance.now();
+                    console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 1) in ${(endTime - startTime).toFixed(2)}ms`);
+                    if (onComplete) onComplete();
+                });
+            } else {
+                if (onComplete) onComplete();
+                return Promise.resolve();
             }
-            
-            if (onComplete) onComplete();
         })
         .catch(error => {
             console.error('Error updating building colors for Stage 1:', error);
@@ -1922,16 +1951,11 @@ function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) 
     
     const startTime = performance.now();
     
-    getBuildingStatus(forceRefresh)
+    return getBuildingStatus(forceRefresh)
         .then(data => {
             const buildingColors = {};
-            // Create a map of numeric ID -> status for easier matching
-            const statusMap = {};
-            Object.entries(data.buildings).forEach(([buildingId, status]) => {
-                const numericId = extractNumericId(buildingId);
-                statusMap[numericId] = status;
-                statusMap[buildingId] = status; // Also store original ID
-            });
+            // Pre-compute status map with all ID variations (optimized)
+            const { statusMap } = buildOptimizedStatusMap(data);
             
             // Update colors for ALL buildings in the viewer (including selected building)
             if (window.viewer && window.viewer.buildingEntities) {
@@ -1951,19 +1975,23 @@ function updateBuildingColorsForStage2(forceRefresh = false, onComplete = null) 
             }
             
             if (Object.keys(buildingColors).length > 0) {
-                window.viewer.updateBuildingColors(buildingColors);
-                const endTime = performance.now();
-                console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 2) in ${(endTime - startTime).toFixed(2)}ms`);
-                
-                // Log if selected building was updated
-                if (selectedBuildingId && buildingColors[selectedBuildingId]) {
-                    console.log(`Selected building ${selectedBuildingId} colored to: ${buildingColors[selectedBuildingId]}`);
-                } else if (selectedBuildingId) {
-                    console.warn(`Selected building ${selectedBuildingId} not found in buildingColors map`);
-                }
+                // Wait for color updates to complete before calling onComplete
+                return window.viewer.updateBuildingColors(buildingColors).then(() => {
+                    const endTime = performance.now();
+                    console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 2) in ${(endTime - startTime).toFixed(2)}ms`);
+                    
+                    // Log if selected building was updated
+                    if (selectedBuildingId && buildingColors[selectedBuildingId]) {
+                        console.log(`Selected building ${selectedBuildingId} colored to: ${buildingColors[selectedBuildingId]}`);
+                    } else if (selectedBuildingId) {
+                        console.warn(`Selected building ${selectedBuildingId} not found in buildingColors map`);
+                    }
+                    if (onComplete) onComplete();
+                });
+            } else {
+                if (onComplete) onComplete();
+                return Promise.resolve();
             }
-            
-            if (onComplete) onComplete();
         })
         .catch(error => {
             console.error('Error updating building colors for Stage 2:', error);
@@ -1982,16 +2010,11 @@ function updateBuildingColorsForStage3(forceRefresh = false, onComplete = null) 
     
     const startTime = performance.now();
     
-    getBuildingStatus(forceRefresh)
+    return getBuildingStatus(forceRefresh)
         .then(data => {
             const buildingColors = {};
-            // Create a map of numeric ID -> status for easier matching
-            const statusMap = {};
-            Object.entries(data.buildings).forEach(([buildingId, status]) => {
-                const numericId = extractNumericId(buildingId);
-                statusMap[numericId] = status;
-                statusMap[buildingId] = status; // Also store original ID
-            });
+            // Pre-compute status map with all ID variations (optimized)
+            const { statusMap } = buildOptimizedStatusMap(data);
             
             // Update colors for ALL buildings in the viewer
             if (window.viewer && window.viewer.buildingEntities) {
@@ -2021,12 +2044,16 @@ function updateBuildingColorsForStage3(forceRefresh = false, onComplete = null) 
             }
             
             if (Object.keys(buildingColors).length > 0) {
-                window.viewer.updateBuildingColors(buildingColors);
-                const endTime = performance.now();
-                console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 3) in ${(endTime - startTime).toFixed(2)}ms`);
+                // Wait for color updates to complete before calling onComplete
+                return window.viewer.updateBuildingColors(buildingColors).then(() => {
+                    const endTime = performance.now();
+                    console.log(`Updated colors for ${Object.keys(buildingColors).length} buildings (Stage 3) in ${(endTime - startTime).toFixed(2)}ms`);
+                    if (onComplete) onComplete();
+                });
+            } else {
+                if (onComplete) onComplete();
+                return Promise.resolve();
             }
-            
-            if (onComplete) onComplete();
         })
         .catch(error => {
             console.error('Error updating building colors for Stage 3:', error);
