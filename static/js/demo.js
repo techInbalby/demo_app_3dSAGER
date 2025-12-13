@@ -16,13 +16,430 @@ let pipelineState = {
     step3Completed: false  // Entity Resolution
 };
 
+// Tutorial system
+let tutorialState = {
+    currentStep: 0,
+    completed: false,
+    fileLoaded: false,
+    buildingClicked: false
+};
+
+const tutorialSteps = [
+    {
+        title: "Welcome to 3dSAGER Demo",
+        content: `
+            <div class="tutorial-step-content">
+                <p class="tutorial-intro">This interactive tutorial will guide you through using the 3dSAGER pipeline to explore and process 3D city models.</p>
+                <p>You can explore files from both <strong>Candidates</strong> (Source A) and <strong>Index</strong> (Source B) tabs. However, to run the pipeline stages, you'll need to select a <strong>Candidates</strong> file.</p>
+            </div>
+        `,
+        highlight: null,
+        waitForAction: false
+    },
+    {
+        title: "Step 1: Explore Files",
+        content: `
+            <div class="tutorial-step-content">
+                <h4>Select a file to explore</h4>
+                <p>Browse the file lists in the <strong>Candidates</strong> or <strong>Index</strong> tabs in the sidebar. Click on any file to load it in the 3D viewer.</p>
+                <p class="tutorial-hint">💡 <em>Wait a few seconds after clicking a file for it to load in the viewer.</em></p>
+            </div>
+        `,
+        highlight: '.file-selection',
+        waitForAction: 'fileLoaded'
+    },
+    {
+        title: "Step 2: Explore Buildings",
+        content: `
+            <div class="tutorial-step-content">
+                <h4>Click on a building</h4>
+                <p>Once a file is loaded, click on any building in the 3D viewer to see its properties. You can rotate, pan, and zoom the view using your mouse or touch controls.</p>
+                <p class="tutorial-hint">💡 <em>The building properties window will show the building ID and available actions.</em></p>
+            </div>
+        `,
+        highlight: '#viewer',
+        waitForAction: 'buildingClicked'
+    },
+    {
+        title: "Step 3: Run Pipeline Stages",
+        content: `
+            <div class="tutorial-step-content">
+                <h4>Use the 3dSAGER Pipeline</h4>
+                <p><strong>Note:</strong> Pipeline stages are only available when a <strong>Candidates</strong> file is loaded.</p>
+                <p>Use the <strong>3dSAGER Pipeline</strong> section in the sidebar to run each stage:</p>
+                <ul class="tutorial-sublist">
+                    <li><strong>Geometric Featurization:</strong> Calculate features (buildings turn orange)</li>
+                    <li><strong>BKAFI Blocking:</strong> Generate candidate pairs (buildings turn yellow)</li>
+                    <li><strong>Matching Classifier:</strong> Find matches (green=true match, red=false positive, gray=no match)</li>
+                </ul>
+                <p class="tutorial-hint">💡 <em>You can also run stages from the building properties window.</em></p>
+            </div>
+        `,
+        highlight: '.pipeline-steps',
+        waitForAction: false
+    },
+    {
+        title: "Step 4: View Results",
+        content: `
+            <div class="tutorial-step-content">
+                <h4>Explore Results</h4>
+                <p>After running BKAFI, click yellow a building to see its pairs. Use the <strong>"View Pairs Visually"</strong> button to compare buildings side-by-side.</p>
+                <p>After running the classifier, view detailed results in the comparison window.</p>
+                <p class="tutorial-hint">💡 <em>Building colors change based on pipeline stage completion.</em></p>
+            </div>
+        `,
+        highlight: null,
+        waitForAction: false
+    },
+    {
+        title: "You're All Set!",
+        content: `
+            <div class="tutorial-step-content">
+                <h4>Ready to explore</h4>
+                <p>You now know how to use the 3dSAGER demo! Feel free to explore different files and run the pipeline stages.</p>
+                <div class="tutorial-tips">
+                    <h4>💡 Quick Tips:</h4>
+                    <ul>
+                        <li>Building colors indicate pipeline stage status</li>
+                        <li>Use fullscreen for better viewing</li>
+                        <li>Loading messages appear during processing</li>
+                    </ul>
+                </div>
+            </div>
+        `,
+        highlight: null,
+        waitForAction: false
+    }
+];
+
+// Show tutorial on first visit
+function showWelcomeGuideIfNeeded() {
+    const dontShowAgain = localStorage.getItem('3dSAGER_dontShowTutorial');
+    if (dontShowAgain === 'true') {
+        console.log('Tutorial skipped (user preference)');
+        return;
+    }
+    
+    console.log('Showing tutorial...');
+    setTimeout(() => {
+        showTutorial();
+    }, 500);
+}
+
+// Make tutorial functions available globally for debugging
+window.showTutorial = showTutorial;
+window.closeTutorialGuide = closeTutorialGuide;
+window.nextTutorialStep = nextTutorialStep;
+window.prevTutorialStep = prevTutorialStep;
+window.skipTutorial = skipTutorial;
+
+// Show tutorial
+function showTutorial() {
+    const tutorialGuide = document.getElementById('tutorial-guide');
+    if (tutorialGuide) {
+        tutorialGuide.style.display = 'flex';
+        // Don't reset step if tutorial was just hidden (allow continuation)
+        if (tutorialState.completed) {
+            tutorialState.completed = false;
+            tutorialState.currentStep = 0;
+            tutorialState.fileLoaded = false;
+            tutorialState.buildingClicked = false;
+        }
+        updateTutorialStep();
+    }
+}
+
+// Update tutorial step display
+function updateTutorialStep() {
+    const step = tutorialSteps[tutorialState.currentStep];
+    if (!step) return;
+    
+    const titleEl = document.getElementById('tutorial-title');
+    const contentEl = document.getElementById('tutorial-step-content');
+    const nextBtn = document.getElementById('tutorial-next-btn');
+    const prevBtn = document.getElementById('tutorial-prev-btn');
+    const skipBtn = document.getElementById('tutorial-skip-btn');
+    const progressFill = document.getElementById('tutorial-progress-fill');
+    const progressText = document.getElementById('tutorial-progress-text');
+    
+    if (titleEl) titleEl.textContent = step.title;
+    if (contentEl) contentEl.innerHTML = step.content;
+    
+    // Update progress
+    const progress = ((tutorialState.currentStep + 1) / tutorialSteps.length) * 100;
+    if (progressFill) progressFill.style.width = progress + '%';
+    if (progressText) progressText.textContent = `Step ${tutorialState.currentStep + 1} of ${tutorialSteps.length}`;
+    
+    // Update buttons - always show Next, Previous, and "Got it, let's try" buttons
+    const tryBtn = document.getElementById('tutorial-try-btn');
+    
+    // Previous button - always visible (enabled only if not on first step)
+    if (prevBtn) {
+        prevBtn.style.display = 'inline-block';
+        prevBtn.disabled = tutorialState.currentStep === 0;
+    }
+    
+    // Next button - always visible
+    if (nextBtn) {
+        if (tutorialState.currentStep === tutorialSteps.length - 1) {
+            nextBtn.textContent = 'Finish';
+            nextBtn.disabled = false;
+        } else {
+            nextBtn.textContent = 'Next';
+            // Enable Next button if action is completed or no action required
+            nextBtn.disabled = step.waitForAction && !checkTutorialAction(step.waitForAction);
+        }
+        nextBtn.style.display = 'inline-block';
+    }
+    
+    // "Got it, let's try!" button - always visible (enabled for interactive steps, disabled for others)
+    if (tryBtn) {
+        tryBtn.style.display = 'inline-block';
+        tryBtn.textContent = 'Got it, let\'s try!';
+        if (step.waitForAction) {
+            // Enable for interactive steps
+            tryBtn.disabled = false;
+            tryBtn.style.opacity = '1';
+            tryBtn.style.cursor = 'pointer';
+        } else {
+            // Disable for non-interactive steps (but still visible)
+            tryBtn.disabled = true;
+            tryBtn.style.opacity = '0.5';
+            tryBtn.style.cursor = 'not-allowed';
+        }
+    }
+    
+    // Skip button - only on first step
+    if (skipBtn) {
+        skipBtn.style.display = tutorialState.currentStep === 0 ? 'inline-block' : 'none';
+    }
+    
+    // Highlight element if specified and scroll to it
+    if (step.highlight) {
+        // For step 3 (pipeline steps), ensure sidebar is visible and scroll to pipeline section
+        if (tutorialState.currentStep === 2) { // Step 3 is index 2
+            const sidebar = document.querySelector('.sidebar');
+            const pipelineSteps = document.querySelector('.pipeline-steps');
+            
+            if (sidebar && pipelineSteps) {
+                // First, scroll the page to show the sidebar (if it's not visible)
+                const sidebarRect = sidebar.getBoundingClientRect();
+                const isSidebarVisible = sidebarRect.top >= 0 && sidebarRect.left >= 0 && 
+                                        sidebarRect.bottom <= window.innerHeight && 
+                                        sidebarRect.right <= window.innerWidth;
+                
+                if (!isSidebarVisible) {
+                    sidebar.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'nearest',
+                        inline: 'nearest'
+                    });
+                }
+                
+                // Then scroll the sidebar internally to show pipeline steps
+                setTimeout(() => {
+                    const pipelineRect = pipelineSteps.getBoundingClientRect();
+                    const sidebarRect = sidebar.getBoundingClientRect();
+                    
+                    // Calculate scroll position to center pipeline steps in sidebar
+                    const elementTop = pipelineSteps.offsetTop;
+                    const sidebarScrollTop = sidebar.scrollTop;
+                    const sidebarHeight = sidebar.clientHeight;
+                    const elementHeight = pipelineSteps.offsetHeight;
+                    
+                    // Scroll to center the element in sidebar viewport
+                    const targetScroll = elementTop - (sidebarHeight / 2) + (elementHeight / 2);
+                    
+                    sidebar.scrollTo({
+                        top: Math.max(0, targetScroll),
+                        behavior: 'smooth'
+                    });
+                }, 400);
+            }
+        }
+        
+        // Highlight the element
+        highlightTutorialElement(step.highlight);
+    } else {
+        const highlight = document.getElementById('tutorial-highlight');
+        if (highlight) highlight.style.display = 'none';
+    }
+    
+    // Auto-advance if action is already completed
+    if (step.waitForAction && checkTutorialAction(step.waitForAction)) {
+        setTimeout(() => {
+            // Enable Next button when action is completed
+            if (nextBtn) {
+                nextBtn.textContent = 'Next';
+                nextBtn.disabled = false;
+            }
+            // Keep "Got it, let's try" visible but update its state
+            if (tryBtn) {
+                tryBtn.disabled = true;
+                tryBtn.style.opacity = '0.5';
+                tryBtn.style.cursor = 'not-allowed';
+            }
+        }, 1000);
+    }
+}
+
+// Check if tutorial action is completed
+function checkTutorialAction(action) {
+    switch(action) {
+        case 'fileLoaded':
+            return tutorialState.fileLoaded;
+        case 'buildingClicked':
+            return tutorialState.buildingClicked;
+        default:
+            return true;
+    }
+}
+
+// Highlight tutorial element and scroll to it
+function highlightTutorialElement(selector) {
+    const highlight = document.getElementById('tutorial-highlight');
+    if (!highlight || !selector) {
+        if (highlight) highlight.style.display = 'none';
+        return;
+    }
+    
+    const element = document.querySelector(selector);
+    if (element) {
+        // For elements inside sidebar, scroll sidebar container first
+        const sidebar = document.querySelector('.sidebar');
+        if (sidebar && sidebar.contains(element)) {
+            // Scroll sidebar to show the element
+            const elementTop = element.offsetTop;
+            const sidebarScrollTop = sidebar.scrollTop;
+            const sidebarHeight = sidebar.clientHeight;
+            const elementHeight = element.offsetHeight;
+            
+            // Calculate if element is visible in sidebar viewport
+            const elementBottom = elementTop + elementHeight;
+            const viewportTop = sidebarScrollTop;
+            const viewportBottom = sidebarScrollTop + sidebarHeight;
+            
+            // Scroll sidebar if element is not fully visible
+            if (elementTop < viewportTop || elementBottom > viewportBottom) {
+                sidebar.scrollTo({
+                    top: elementTop - (sidebarHeight / 2) + (elementHeight / 2),
+                    behavior: 'smooth'
+                });
+            }
+        } else {
+            // For other elements, use standard scrollIntoView
+            element.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center',
+                inline: 'nearest'
+            });
+        }
+        
+        // Wait a bit for scroll to complete, then highlight
+        setTimeout(() => {
+            const rect = element.getBoundingClientRect();
+            highlight.style.display = 'block';
+            highlight.style.top = (rect.top - 5) + 'px';
+            highlight.style.left = (rect.left - 5) + 'px';
+            highlight.style.width = (rect.width + 10) + 'px';
+            highlight.style.height = (rect.height + 10) + 'px';
+        }, 500);
+    } else {
+        highlight.style.display = 'none';
+    }
+}
+
+// Next tutorial step
+function nextTutorialStep() {
+    if (tutorialState.currentStep < tutorialSteps.length - 1) {
+        tutorialState.currentStep++;
+        updateTutorialStep();
+    } else {
+        closeTutorialGuide();
+    }
+}
+
+// Previous tutorial step
+function prevTutorialStep() {
+    if (tutorialState.currentStep > 0) {
+        tutorialState.currentStep--;
+        updateTutorialStep();
+    }
+}
+
+// Skip tutorial
+function skipTutorial() {
+    const dontShowAgain = confirm('Skip the tutorial? You can always access it again by refreshing the page.');
+    if (dontShowAgain) {
+        localStorage.setItem('3dSAGER_dontShowTutorial', 'true');
+    }
+    closeTutorialGuide();
+}
+
+// Hide tutorial temporarily (user can bring it back)
+function hideTutorialForNow() {
+    const tutorialGuide = document.getElementById('tutorial-guide');
+    const highlight = document.getElementById('tutorial-highlight');
+    if (tutorialGuide) {
+        tutorialGuide.style.display = 'none';
+    }
+    if (highlight) {
+        highlight.style.display = 'none';
+    }
+    // Don't mark as completed - user can bring it back
+}
+
+// Helper function to advance tutorial when pipeline action is performed
+function advanceTutorialForPipelineAction(actionType) {
+    if (tutorialState.completed) return;
+    
+    // Advance if we're on step 3 (Run Pipeline Stages) or later
+    // Step 3 is index 2 (0-indexed)
+    if (tutorialState.currentStep === 2) {
+        // If on step 3 (pipeline stages), advance to step 4 after a short delay
+        setTimeout(() => {
+            if (tutorialState.currentStep === 2) {
+                nextTutorialStep();
+            }
+        }, 1500);
+    }
+}
+
+// Close tutorial permanently
+function closeTutorialGuide() {
+    const tutorialGuide = document.getElementById('tutorial-guide');
+    const highlight = document.getElementById('tutorial-highlight');
+    if (tutorialGuide) {
+        tutorialGuide.style.display = 'none';
+    }
+    if (highlight) {
+        highlight.style.display = 'none';
+    }
+    tutorialState.completed = true;
+}
+
 // Initialize when page loads
 document.addEventListener('DOMContentLoaded', function() {
     console.log('3dSAGER Demo initialized');
     loadDataFiles();
     initLocationMap();
     updatePipelineUI(); // Initialize pipeline UI
+    showWelcomeGuideIfNeeded(); // Show tutorial if needed
+    setupWelcomeGuideClickHandlers(); // Setup click handlers for tutorial
 });
+
+// Setup click handlers for tutorial guide
+function setupWelcomeGuideClickHandlers() {
+    const tutorialGuide = document.getElementById('tutorial-guide');
+    if (tutorialGuide) {
+        // Don't close on overlay click - require explicit close or completion
+        tutorialGuide.addEventListener('click', function(e) {
+            e.stopPropagation();
+        });
+    }
+}
+
+
 
 // Load data files from API
 function loadDataFiles() {
@@ -94,6 +511,28 @@ function selectFile(filePath, source) {
         if (data.success) {
             currentSessionId = data.session_id;
             loadFileInViewer(filePath);
+            
+            // Update tutorial state when file is loaded
+            if (!tutorialState.completed) {
+                tutorialState.fileLoaded = true;
+                // Wait a bit for file to actually load, then update tutorial
+                setTimeout(() => {
+                    const step = tutorialSteps[tutorialState.currentStep];
+                    if (step && step.waitForAction === 'fileLoaded') {
+                        // Show Next button when action is completed
+                        const nextBtn = document.getElementById('tutorial-next-btn');
+                        const tryBtn = document.getElementById('tutorial-try-btn');
+                        if (nextBtn) {
+                            nextBtn.style.display = 'inline-block';
+                            nextBtn.textContent = 'Next';
+                            nextBtn.disabled = false;
+                        }
+                        if (tryBtn) {
+                            tryBtn.style.display = 'none';
+                        }
+                    }
+                }, 2000);
+            }
         } else {
             console.error('Error selecting file:', data.error);
         }
@@ -290,7 +729,31 @@ function loadFileInViewer(filePath) {
                 if (window.viewer && window.viewer.zoomToModel) {
                     window.viewer.zoomToModel();
                 }
-            }, 1000);
+                
+                // Update tutorial state when file is loaded (wait a bit for rendering)
+                if (!tutorialState.completed && window.viewer && window.viewer.buildingEntities && window.viewer.buildingEntities.size > 0) {
+                    tutorialState.fileLoaded = true;
+                    // Update tutorial if waiting for this action
+                    const step = tutorialSteps[tutorialState.currentStep];
+                    if (step && step.waitForAction === 'fileLoaded') {
+                        setTimeout(() => {
+                            // Show Next button when action is completed
+                            const nextBtn = document.getElementById('tutorial-next-btn');
+                            const tryBtn = document.getElementById('tutorial-try-btn');
+                            if (nextBtn) {
+                                nextBtn.style.display = 'inline-block';
+                                nextBtn.textContent = 'Next';
+                                nextBtn.disabled = false;
+                            }
+                            if (tryBtn) {
+                                tryBtn.disabled = true;
+                                tryBtn.style.opacity = '0.5';
+                                tryBtn.style.cursor = 'not-allowed';
+                            }
+                        }, 500);
+                    }
+                }
+            }, 2000);
         } else if (attempts < 20) {
             // Retry up to 20 times (2 seconds total)
             console.log(`Waiting for viewer to initialize... (attempt ${attempts + 1})`);
@@ -322,6 +785,27 @@ function loadFileInViewer(filePath) {
 
 // Show building properties window
 function showBuildingProperties(buildingId, cityObject) {
+    // Update tutorial state when building is clicked
+    if (!tutorialState.completed) {
+        tutorialState.buildingClicked = true;
+        // Update tutorial if waiting for this action
+        const step = tutorialSteps[tutorialState.currentStep];
+        if (step && step.waitForAction === 'buildingClicked') {
+            setTimeout(() => {
+                // Show Next button when action is completed
+                const nextBtn = document.getElementById('tutorial-next-btn');
+                const tryBtn = document.getElementById('tutorial-try-btn');
+                if (nextBtn) {
+                    nextBtn.style.display = 'inline-block';
+                    nextBtn.textContent = 'Next';
+                    nextBtn.disabled = false;
+                }
+                if (tryBtn) {
+                    tryBtn.style.display = 'none';
+                }
+            }, 500);
+        }
+    }
     selectedBuildingId = buildingId;
     selectedBuildingData = cityObject;
     
@@ -416,6 +900,9 @@ function calculateGeometricFeatures() {
         alert('Please select a candidates file first.');
         return;
     }
+    
+    // Advance tutorial if active (when user clicks pipeline button)
+    advanceTutorialForPipelineAction('calculateFeatures');
     
     // Can be called from sidebar button or building properties window
     const stepBtn = document.getElementById('step-btn-1');
@@ -666,6 +1153,9 @@ function runBKAFI() {
     }
     
     console.log('Loading BKAFI results');
+    
+    // Advance tutorial if active
+    advanceTutorialForPipelineAction('runBKAFI');
     
     const stepBtn = document.getElementById('step-btn-2');
     stepBtn.textContent = 'Loading...';
@@ -1655,6 +2145,9 @@ function viewResults() {
     
     console.log('Loading classifier results summary');
     
+    // Advance tutorial if active (when user clicks pipeline button)
+    advanceTutorialForPipelineAction('viewResults');
+    
     const stepBtn = document.getElementById('step-btn-3');
     stepBtn.textContent = 'Loading...';
     stepBtn.disabled = true;
@@ -2073,6 +2566,15 @@ function toggleFullscreen() {
     console.log('Toggling fullscreen');
     if (window.viewer && window.viewer.toggleFullscreen) {
         window.viewer.toggleFullscreen();
+    }
+}
+
+// Reset viewer camera to initial position after first load
+function resetViewerCamera() {
+    if (window.viewer && window.viewer.resetCamera) {
+        window.viewer.resetCamera();
+    } else {
+        console.warn('Viewer not available or resetCamera method not found');
     }
 }
 

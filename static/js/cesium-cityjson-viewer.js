@@ -23,6 +23,7 @@ class CesiumCityJSONViewer {
         this.crs = null; // Store coordinate reference system from metadata
         this.sourceCRS = null; // Source CRS from CityJSON metadata
         this.isComparisonViewer = options.isComparisonViewer || false; // Lightweight mode for comparison
+        this.initialCameraPosition = null; // Store initial camera position after first file load
         
         // The Hague coordinates (default location)
         this.defaultLocation = {
@@ -80,7 +81,7 @@ class CesiumCityJSONViewer {
                 baseLayerPicker: false, // Disable to avoid Ion token requirement
                 vrButton: false,
                 geocoder: false, // Geocoder may also use Ion, disable if not needed
-                homeButton: true,
+                homeButton: false, // Disable default home button - we'll add custom reset button
                 sceneModePicker: true,
                 navigationHelpButton: true,
                 animation: false,
@@ -440,6 +441,7 @@ class CesiumCityJSONViewer {
                     // Fit camera to all buildings (unless auto-fit is disabled for comparison viewers)
                     if (entityCount > 0 && !this.skipAutoFit) {
                         this.fitCameraToBuildings();
+                        // Initial camera position will be stored in fitCameraToBuildings after animation completes
                     }
                     
                     // Small delay before hiding loading to show completion (only for main viewer)
@@ -1075,6 +1077,14 @@ class CesiumCityJSONViewer {
                         roll: 0.0
                     },
                     duration: 2.0
+                }).then(() => {
+                    // Store initial camera position after camera animation completes
+                    // Wait longer to ensure camera has fully settled
+                    if (!this.isComparisonViewer && !this.initialCameraPosition) {
+                        setTimeout(() => {
+                            this.storeInitialCameraPosition();
+                        }, 500);
+                    }
                 });
             }
             return;
@@ -1088,6 +1098,14 @@ class CesiumCityJSONViewer {
                 Cesium.Math.toRadians(-90), // Top-down view (-90 degrees = looking straight down)
                 0
             )
+        }).then(() => {
+            // Store initial camera position after camera animation completes
+            // Wait longer to ensure camera has fully settled
+            if (!this.isComparisonViewer && !this.initialCameraPosition) {
+                setTimeout(() => {
+                    this.storeInitialCameraPosition();
+                }, 500);
+            }
         });
     }
     
@@ -1103,6 +1121,7 @@ class CesiumCityJSONViewer {
         this.boundingBox = null;
         this.crs = null;
         this.sourceCRS = null;
+        this.initialCameraPosition = null; // Clear initial camera position when clearing buildings
     }
     
     clearPlaceholder() {
@@ -1186,7 +1205,37 @@ class CesiumCityJSONViewer {
         }, 5000);
     }
     
+    // Store initial camera position after file is loaded
+    storeInitialCameraPosition() {
+        if (this.viewer && this.viewer.camera) {
+            const camera = this.viewer.camera;
+            // Store the current camera position and orientation
+            // Use the actual camera position after it has settled
+            this.initialCameraPosition = {
+                destination: Cesium.Cartesian3.clone(camera.position),
+                orientation: {
+                    heading: camera.heading,
+                    pitch: camera.pitch,
+                    roll: camera.roll
+                }
+            };
+            console.log('Stored initial camera position:', {
+                position: Cesium.Cartographic.fromCartesian(camera.position),
+                heading: camera.heading,
+                pitch: camera.pitch
+            });
+        }
+    }
+    
+    // Reset camera to initial position after first load
     resetCamera() {
+        if (!this.viewer || !this.viewer.camera) {
+            console.warn('Cannot reset camera: viewer not available');
+            return;
+        }
+        
+        // Always use fitCameraToBuildings to ensure buildings are visible
+        // This is more reliable than storing/restoring camera position
         this.fitCameraToBuildings();
     }
     

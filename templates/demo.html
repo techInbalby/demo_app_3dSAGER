@@ -29,6 +29,9 @@
             <div class="sidebar-header">
                 <div class="header-top">
                     <a href="/" class="back-btn">← Back to Home</a>
+                    <button class="tutorial-toggle-btn" id="tutorial-toggle-btn" onclick="showTutorial()" title="Show Tutorial">
+                        📖 Tutorial
+                    </button>
                 </div>
                 <h2>3dSAGER Pipeline</h2>
             </div>
@@ -101,7 +104,7 @@
                 <div class="viewer-header">
                     <h3>3D City Model Viewer</h3>
                     <div class="viewer-controls">
-                        <!-- Reset button removed - camera auto-resets when loading new files -->
+                        <button class="control-btn" onclick="resetViewerCamera()" title="Reset to initial view">Reset View</button>
                         <button class="control-btn" onclick="toggleFullscreen()">Fullscreen</button>
                     </div>
                 </div>
@@ -205,6 +208,38 @@
             <div class="loading-message" id="loading-message">Processing...</div>
         </div>
     </div>
+
+    <!-- Interactive Tutorial Guide -->
+    <div id="tutorial-guide" class="tutorial-guide-overlay" style="display: none;">
+        <div class="tutorial-guide-content">
+            <div class="tutorial-guide-header">
+                <h2 id="tutorial-title">Welcome to 3dSAGER Demo</h2>
+                <button class="close-btn" onclick="closeTutorialGuide()">×</button>
+            </div>
+            <div class="tutorial-guide-body">
+                <div id="tutorial-step-content">
+                    <!-- Step content will be dynamically updated -->
+                </div>
+                <div class="tutorial-progress">
+                    <div class="tutorial-progress-bar">
+                        <div class="tutorial-progress-fill" id="tutorial-progress-fill"></div>
+                    </div>
+                    <span class="tutorial-progress-text" id="tutorial-progress-text">Step 1 of 5</span>
+                </div>
+            </div>
+            <div class="tutorial-guide-footer">
+                <button class="action-btn secondary" id="tutorial-skip-btn" onclick="skipTutorial()" style="display: none;">Skip Tutorial</button>
+                <div class="tutorial-buttons">
+                    <button class="action-btn secondary" id="tutorial-prev-btn" onclick="prevTutorialStep()">Previous</button>
+                    <button class="action-btn primary" id="tutorial-try-btn" onclick="hideTutorialForNow()">Got it, let's try!</button>
+                    <button class="action-btn primary" id="tutorial-next-btn" onclick="nextTutorialStep()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Tutorial Highlight Overlay (for highlighting UI elements) -->
+    <div id="tutorial-highlight" class="tutorial-highlight" style="display: none;"></div>
 
     <!-- Leaflet JS for location map -->
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
