@@ -87,9 +87,9 @@
                     <div class="step-number">3</div>
                     <div class="step-status"></div>
                     <div class="step-content">
-                        <h4>Entity Resolution</h4>
-                        <p>View matching results</p>
-                        <button class="step-btn" id="step-btn-3" onclick="viewResults()" disabled>View Results</button>
+                        <h4>Matching Classifier</h4>
+                        <p>Run Bagging Classifier</p>
+                        <button class="step-btn" id="step-btn-3" onclick="viewResults()" disabled>Run Classifier</button>
                     </div>
                 </div>
             </div>
@@ -167,6 +167,11 @@
                     <div class="viewer-label">Candidate Building</div>
                     <div id="comparison-viewer-candidate" class="comparison-viewer"></div>
                     <div class="viewer-building-id" id="comparison-candidate-id">Loading...</div>
+                    <!-- Button to show classifier predictions and true labels - under candidate building -->
+                    <div id="comparison-classifier-section" style="margin-top: 15px; padding: 15px; display: none;">
+                        <button class="action-btn" id="show-classifier-results-btn" style="width: 100%;">Show Classifier Results</button>
+                        <div id="classifier-results" style="margin-top: 15px;"></div>
+                    </div>
                 </div>
                 
                 <!-- Right side: BKAFI pairs (stacked vertically) -->

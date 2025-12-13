@@ -810,6 +810,10 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         return;
     }
     
+    // Store pairs data in the window for later use (for classifier results)
+    comparisonWindow.setAttribute('data-candidate-id', candidateBuildingId);
+    comparisonWindow.setAttribute('data-pairs', JSON.stringify(pairs));
+    
     // Show window first
     comparisonWindow.style.display = 'flex';
     
@@ -845,7 +849,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         candidateViewerEl.id = 'comparison-viewer-candidate'; // Reset ID
         candidateViewerEl.style.position = 'relative'; // Reset positioning
         candidateViewerEl.style.width = '100%'; // Ensure width
-        candidateViewerEl.style.height = '400px'; // Ensure height
+        candidateViewerEl.style.height = '180px'; // Same size as pair viewers
         
         // Add loading message
         const loadingDiv = document.createElement('div');
@@ -867,6 +871,27 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     
     if (candidateIdEl) {
         candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
+    }
+    
+    // Setup classifier results section - show button immediately (can be clicked before buildings finish loading)
+    const classifierSection = document.getElementById('comparison-classifier-section');
+    const showClassifierBtn = document.getElementById('show-classifier-results-btn');
+    const classifierResults = document.getElementById('classifier-results');
+    
+    if (classifierSection && showClassifierBtn && classifierResults) {
+        // Show classifier section immediately (button is available right away)
+        classifierSection.style.display = 'block';
+        classifierResults.innerHTML = '';
+        showClassifierBtn.textContent = 'Show Classifier Results';
+        showClassifierBtn.disabled = false;
+        
+        // Set up button click handler - use stored pairs from window
+        showClassifierBtn.onclick = () => {
+            // Get pairs from stored data
+            const storedPairs = JSON.parse(comparisonWindow.getAttribute('data-pairs') || '[]');
+            const storedCandidateId = comparisonWindow.getAttribute('data-candidate-id') || candidateBuildingId;
+            showClassifierResultsInComparisonWindow(storedCandidateId, storedPairs);
+        };
     }
     
     // Load candidate building first, then pairs sequentially
@@ -908,6 +933,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
                     findAndLoadBuilding(candidateBuildingId, retryEl, candidateIdElRef, 'candidate', () => {
                         console.log(`=== CANDIDATE BUILDING LOADED ===`);
                         console.log(`Starting to load ${pairs.length} pairs`);
+                        // Load pairs sequentially (button is already visible and can be clicked)
                         loadPairsSequentially(pairs.slice(0, 3), 0);
                     });
                 } else {
@@ -922,6 +948,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
             // After candidate loads, start loading pairs
             console.log(`=== CANDIDATE BUILDING LOADED ===`);
             console.log(`Starting to load ${pairs.length} pairs`);
+            // Load pairs sequentially (button is already visible and can be clicked)
             loadPairsSequentially(pairs.slice(0, 3), 0);
         });
     };
@@ -945,7 +972,7 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         pairViewer.id = `comparison-viewer-pair-${index}`;
         pairViewer.style.position = 'relative';
         pairViewer.style.width = '100%';
-        pairViewer.style.height = '400px';
+        pairViewer.style.height = '180px'; // Same size as candidate viewer
         pairViewer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999; font-size: 12px;">Waiting to load...</div>';
         pairViewerEl.appendChild(pairViewer);
         
@@ -971,9 +998,12 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
 }
 
 // Load pairs sequentially (one at a time) to avoid overwhelming the browser
-function loadPairsSequentially(pairs, currentIndex) {
+function loadPairsSequentially(pairs, currentIndex, onAllComplete = null) {
     if (currentIndex >= pairs.length) {
         console.log('All pairs loaded');
+        if (onAllComplete) {
+            onAllComplete();
+        }
         return;
     }
     
@@ -984,7 +1014,7 @@ function loadPairsSequentially(pairs, currentIndex) {
     if (!pairViewer || !pairIdEl) {
         console.error(`Pair viewer elements not found for index ${currentIndex}`);
         // Continue with next pair
-        setTimeout(() => loadPairsSequentially(pairs, currentIndex + 1), 100);
+        setTimeout(() => loadPairsSequentially(pairs, currentIndex + 1, onAllComplete), 100);
         return;
     }
     
@@ -998,7 +1028,7 @@ function loadPairsSequentially(pairs, currentIndex) {
     findAndLoadBuilding(pair.index_id, pairViewer, pairIdEl, viewerType, () => {
         // After this pair loads, load the next one
         setTimeout(() => {
-            loadPairsSequentially(pairs, currentIndex + 1);
+            loadPairsSequentially(pairs, currentIndex + 1, onAllComplete);
         }, 500); // Small delay between loads
     });
 }
@@ -1369,6 +1399,146 @@ function cleanupComparisonViewers() {
     });
 }
 
+// Show classifier results in comparison window
+function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs) {
+    console.log('Showing classifier results for building:', candidateBuildingId);
+    
+    const classifierSection = document.getElementById('comparison-classifier-section');
+    const classifierResults = document.getElementById('classifier-results');
+    const showClassifierBtn = document.getElementById('show-classifier-results-btn');
+    
+    if (!classifierSection || !classifierResults) {
+        console.error('Classifier section elements not found');
+        return;
+    }
+    
+    // Show the section (it's already visible, but ensure it's displayed)
+    classifierSection.style.display = 'block';
+    
+    // Update button text to indicate results are shown (but keep it enabled so user can see results again)
+    if (showClassifierBtn) {
+        showClassifierBtn.textContent = 'Classifier Results (shown)';
+        // Don't disable the button - allow user to scroll to results again if needed
+    }
+    
+    // Clear previous results
+    classifierResults.innerHTML = '';
+    
+    // Analyze pairs to determine summary message
+    let hasMatchPrediction = false;
+    let hasTrueMatch = false;
+    let hasFalsePositive = false;
+    
+    pairs.forEach((pair) => {
+        const prediction = pair.prediction !== undefined ? pair.prediction : null;
+        const trueLabel = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
+        
+        if (prediction === 1) {
+            hasMatchPrediction = true;
+            if (trueLabel === 1) {
+                hasTrueMatch = true;
+            } else if (trueLabel === 0) {
+                hasFalsePositive = true;
+            }
+        }
+    });
+    
+    // Create results container
+    const resultsContainer = document.createElement('div');
+    resultsContainer.style.cssText = 'background: #f8f9fa; border-radius: 8px; padding: 15px;';
+    
+    // Add heading
+    const heading = document.createElement('h4');
+    heading.style.cssText = 'margin: 0 0 15px 0; color: #667eea; font-size: 16px;';
+    heading.textContent = 'Classifier Predictions & True Labels';
+    resultsContainer.appendChild(heading);
+    
+    // Add summary message
+    const summaryDiv = document.createElement('div');
+    summaryDiv.style.cssText = 'background: white; border: 2px solid #667eea; border-radius: 6px; padding: 12px; margin-bottom: 15px; font-weight: 600;';
+    
+    if (!hasMatchPrediction) {
+        summaryDiv.style.color = '#6c757d';
+        summaryDiv.textContent = 'No matches were found in the BKAFI pairs';
+    } else if (hasTrueMatch) {
+        summaryDiv.style.color = '#28a745';
+        summaryDiv.textContent = 'True match was found';
+    } else if (hasFalsePositive) {
+        summaryDiv.style.color = '#dc3545';
+        summaryDiv.textContent = 'False positive match was found';
+    } else {
+        summaryDiv.style.color = '#6c757d';
+        summaryDiv.textContent = 'Match predictions found (true labels unknown)';
+    }
+    
+    resultsContainer.appendChild(summaryDiv);
+    
+    // Add results for each pair
+    pairs.forEach((pair, index) => {
+        const pairResult = document.createElement('div');
+        pairResult.style.cssText = 'background: white; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; margin-bottom: 10px;';
+        
+        const prediction = pair.prediction !== undefined ? pair.prediction : null;
+        const trueLabel = pair.true_label !== undefined && pair.true_label !== null ? pair.true_label : null;
+        
+        // Determine colors based on values
+        const predictionColor = prediction === 1 ? '#28a745' : '#dc3545';
+        const predictionText = prediction === 1 ? 'Match' : 'No Match';
+        const trueLabelColor = trueLabel === 1 ? '#28a745' : (trueLabel === 0 ? '#dc3545' : '#6c757d');
+        const trueLabelText = trueLabel === 1 ? 'Match' : (trueLabel === 0 ? 'No Match' : 'Unknown');
+        
+        // Check if prediction matches true label
+        const isCorrect = prediction !== null && trueLabel !== null && prediction === trueLabel;
+        const correctnessBadge = isCorrect ? 
+            '<span style="background: #28a745; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px;">✓ Correct</span>' :
+            (trueLabel !== null ? '<span style="background: #dc3545; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; margin-left: 8px;">✗ Incorrect</span>' : '');
+        
+        pairResult.innerHTML = `
+            <div style="margin-bottom: 8px;">
+                <strong style="color: #333;">Pair ${index + 1}</strong>
+                ${correctnessBadge}
+            </div>
+            <div style="font-size: 13px; color: #666; margin-bottom: 6px;">
+                <strong>Index Building ID:</strong> ${pair.index_id}
+            </div>
+            <div style="display: flex; gap: 15px; margin-top: 10px;">
+                <div style="flex: 1;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 4px;">Prediction</div>
+                    <div style="font-size: 14px; font-weight: 600; color: ${predictionColor};">
+                        ${predictionText}
+                    </div>
+                </div>
+                <div style="flex: 1;">
+                    <div style="font-size: 12px; color: #999; margin-bottom: 4px;">True Label</div>
+                    <div style="font-size: 14px; font-weight: 600; color: ${trueLabelColor};">
+                        ${trueLabelText}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        resultsContainer.appendChild(pairResult);
+    });
+    
+    classifierResults.appendChild(resultsContainer);
+    
+    console.log('Classifier results displayed for', pairs.length, 'pairs');
+    
+    // Auto-scroll to show the classifier results after a short delay to ensure DOM is updated
+    setTimeout(() => {
+        const comparisonContent = document.querySelector('.comparison-content');
+        if (comparisonContent && classifierSection) {
+            // Scroll to the classifier section smoothly
+            classifierSection.scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'start',
+                inline: 'nearest'
+            });
+            console.log('Scrolled to classifier results');
+        }
+    }, 100);
+}
+
 // Close BKAFI comparison window
 function closeBkafiComparisonWindow() {
     const comparisonWindow = document.getElementById('bkafi-comparison-window');
@@ -1394,6 +1564,22 @@ function closeBkafiComparisonWindow() {
     }
     if (pairsViewersEl) {
         pairsViewersEl.innerHTML = '';
+    }
+    
+    // Reset classifier section
+    const classifierSection = document.getElementById('comparison-classifier-section');
+    const classifierResults = document.getElementById('classifier-results');
+    const showClassifierBtn = document.getElementById('show-classifier-results-btn');
+    
+    if (classifierSection) {
+        classifierSection.style.display = 'none';
+    }
+    if (classifierResults) {
+        classifierResults.innerHTML = '';
+    }
+    if (showClassifierBtn) {
+        showClassifierBtn.disabled = false;
+        showClassifierBtn.textContent = 'Show Classifier Results';
     }
 }
 
