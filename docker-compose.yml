@@ -12,7 +12,6 @@ services:
       # Mount writable directories for runtime data
       - ./results_demo:/app/results_demo
       - ./saved_model_files:/app/saved_model_files
-      - ./uploads:/app/uploads
       - ./logs:/app/logs
     environment:
       - FLASK_ENV=development

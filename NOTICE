@@ -1,0 +1,136 @@
+3dSAGER Demo Application
+Copyright [2026] [COPYRIGHT OWNER]
+
+This product includes software developed by the 3dSAGER project.
+
+IMPORTANT: This application is based on or uses code from the 3dSAGER project,
+which is licensed under the Apache License 2.0. The 3dSAGER_LICENSE file
+contains the full Apache License 2.0 terms that apply to the 3dSAGER components.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+=============================================================================
+
+This product includes the following third-party software components:
+
+BACKEND DEPENDENCIES (Python):
+
+1. Flask (v3.0.0)
+   License: BSD 3-Clause License
+   Copyright (c) 2010 Pallets
+   https://github.com/pallets/flask
+
+2. Werkzeug (v3.0.1)
+   License: BSD 3-Clause License
+   Copyright (c) 2007 Pallets
+   https://github.com/pallets/werkzeug
+
+3. NumPy (v1.24.3)
+   License: BSD 3-Clause License
+   Copyright (c) 2005-2023, NumPy Developers
+   https://numpy.org/
+
+4. SciPy (v1.11.4)
+   License: BSD 3-Clause License
+   Copyright (c) 2001-2002 Enthought, Inc.
+   https://scipy.org/
+
+5. XGBoost (v2.0.3)
+   License: Apache License 2.0
+   Copyright (c) 2016-2023, XGBoost Contributors
+   https://github.com/dmlc/xgboost
+
+6. scikit-learn (v1.3.2)
+   License: BSD 3-Clause License
+   Copyright (c) 2007-2023 The scikit-learn developers
+   https://scikit-learn.org/
+
+7. pandas (v2.1.4)
+   License: BSD 3-Clause License
+   Copyright (c) 2008-2023, AQR Capital Management, LLC, Lambda Foundry, Inc.
+   and PyData Development Team
+   https://pandas.pydata.org/
+
+8. requests (v2.31.0)
+   License: Apache License 2.0
+   Copyright 2014 Kenneth Reitz
+   https://github.com/psf/requests
+
+9. python-dotenv (v1.0.0)
+   License: MIT License
+   Copyright (c) 2011-2023, Saurabh Kumar, Ted Tieken
+   https://github.com/theskumar/python-dotenv
+
+10. joblib (v1.3.2)
+    License: BSD 3-Clause License
+    Copyright (c) 2008-2023, The joblib developers
+    https://joblib.readthedocs.io/
+
+11. Flask-Compress (v1.14)
+    License: MIT License
+    Copyright (c) 2014, Marcus McCurdy
+    https://github.com/colour-science/flask-compress
+
+FRONTEND DEPENDENCIES (JavaScript):
+
+1. CesiumJS (v1.110)
+   License: Apache License 2.0
+   Copyright (c) 2011-2023 Cesium Contributors
+   https://cesium.com/
+
+2. Three.js (r128)
+   License: MIT License
+   Copyright (c) 2010-2023 three.js authors
+   https://threejs.org/
+
+3. Leaflet (v1.9.4)
+   License: BSD 2-Clause License
+   Copyright (c) 2010-2023, Vladimir Agafonkin
+   Copyright (c) 2010-2011, CloudMade
+   https://leafletjs.com/
+
+4. proj4js (v2.9.0)
+   License: MIT License
+   Copyright (c) 2014, Mike Adair, Richard Greenwood, Didier Richard,
+   Stephen Irons, Olivier Terral and Calvin Metcalf
+   https://github.com/proj4js/proj4js
+
+5. Google Fonts - Inter
+   License: SIL Open Font License 1.1
+   Copyright 2020 The Inter Project Authors
+   https://fonts.google.com/specimen/Inter
+
+=============================================================================
+
+LICENSE COMPATIBILITY NOTES:
+
+All third-party libraries used in this application are licensed under
+permissive open-source licenses (BSD, MIT, Apache 2.0, SIL OFL) that are
+compatible with the Apache License 2.0 used for this application.
+
+- BSD licenses: Compatible with Apache 2.0
+- MIT License: Compatible with Apache 2.0
+- Apache License 2.0: Fully compatible
+- SIL Open Font License: Compatible for font usage
+
+This application may be used, modified, and distributed in accordance
+with the Apache License 2.0, subject to the attribution requirements
+of the individual third-party components listed above.
+
+=============================================================================
+
+For detailed license information, please refer to:
+- 3dSAGER_LICENSE file in the root directory
+- Individual library documentation and license files
+- PyPI package pages for Python dependencies
+- Library websites for JavaScript dependencies

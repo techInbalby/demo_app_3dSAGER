@@ -34,8 +34,8 @@ COPY static/ static/
 COPY data/ /app/data/
 
 # Create necessary directories
-RUN mkdir -p uploads logs results saved_model_files && \
-    touch uploads/.gitkeep logs/.gitkeep
+RUN mkdir -p logs results saved_model_files && \
+    touch logs/.gitkeep
 
 # Expose Flask port
 EXPOSE 5000

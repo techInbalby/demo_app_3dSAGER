@@ -71,18 +71,6 @@
                     <h3>BKAFI Blocking</h3>
                     <p>Lightweight and interpretable blocking method that leverages feature importance scores to efficiently generate high-recall candidate sets.</p>
                 </div>
-                
-                <div class="card feature-card">
-                    <div class="feature-icon">🔬</div>
-                    <h3>Research Ready</h3>
-                    <p>Built for academic research with comprehensive evaluation on real-world urban datasets and publicly available code for reproducibility.</p>
-                </div>
-                
-                <div class="card feature-card">
-                    <div class="feature-icon">🌐</div>
-                    <h3>Urban Applications</h3>
-                    <p>Designed for urban planning, disaster management, and rapid response scenarios where accurate 3D object matching is critical.</p>
-                </div>
             </div>
         </div>
     </section>
@@ -107,12 +95,31 @@
                         <h3>Technology Stack</h3>
                         <ul>
                             <li><strong>Backend:</strong> Flask, Python, NumPy, Scientific Computing</li>
-                            <li><strong>3D Processing:</strong> Three.js, WebGL, CityJson mesh analysis</li>
-                            <li><strong>Machine Learning:</strong> XGBoost, Geometric feature extraction, BKAFI blocking</li>
+                            <li><strong>3D Visualization:</strong> CesiumJS, Three.js, WebGL, CityJSON rendering</li>
+                            <li><strong>Data Display:</strong> Pre-computed results visualization (XGBoost predictions, BKAFI blocking results)</li>
                             <li><strong>Web Framework:</strong> Flask, Modern JavaScript, Responsive Design</li>
-                            <li><strong>Visualization:</strong> Advanced 3D rendering, Real-time entity resolution</li>
-                            <li><strong>Performance:</strong> KDTree indexing, Efficient nearest neighbor search</li>
+                            <li><strong>Visualization:</strong> Advanced 3D rendering, Interactive building comparison</li>
+                            <li><strong>Performance:</strong> Optimized file loading, Caching for fast lookups</li>
                         </ul>
+                    </div>
+                    <div class="3dsager-info" style="margin-top: 2rem;">
+                        <h3>About 3dSAGER</h3>
+                        <p>
+                            This demo application visualizes results from the <strong>3dSAGER</strong> (3D Spatial Attribute-based Geospatial Entity Resolution) pipeline.
+                        </p>
+                        <p>
+                            <strong>3dSAGER</strong> is a research project for matching and resolving entities between different 3D city model datasets using 
+                            coordinate-agnostic geometric features and machine learning.
+                        </p>
+                        <p>
+                            <strong>Repository:</strong> <a href="https://anonymous.4open.science/r/3dSAGER/README.md" target="_blank" rel="noopener noreferrer">3dSAGER Repository</a>
+                        </p>
+                        <p>
+                            <strong>Authors:</strong> [Add 3dSAGER authors here]
+                        </p>
+                        <p style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid rgba(102, 126, 234, 0.2);">
+                            <em>This application is intended for academic and research purposes only.</em>
+                        </p>
                     </div>
                 </div>
             </div>
@@ -136,8 +143,11 @@
     <footer class="footer">
         <div class="container">
             <div class="footer-content">
-                <p>&copy; 2024 3dSAGER Research Team. All rights reserved.</p>
+                <p>&copy; 2026 3dSAGER Research Team. All rights reserved.</p>
                 <p>Built for academic research and demonstration purposes.</p>
+                <p style="font-size: 0.85em; color: #999; margin-top: 0.5rem;">
+                    This demo application was developed with the assistance of AI tools for code generation and implementation.
+                </p>
             </div>
         </div>
     </footer>

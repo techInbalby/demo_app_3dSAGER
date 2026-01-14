@@ -21,7 +21,6 @@ BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
 RESULTS_DIR = BASE_DIR / 'results_demo'
 SAVED_MODEL_DIR = BASE_DIR / 'saved_model_files'
-UPLOADS_DIR = BASE_DIR / 'uploads'
 LOGS_DIR = BASE_DIR / 'logs'
 
 # Results JSON files
@@ -32,7 +31,7 @@ DEMO_METRICS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_metrics_summary_seed1
 CONFIDENCE_THRESHOLD = 0.5
 
 # Ensure directories exist
-for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, UPLOADS_DIR, LOGS_DIR]:
+for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, LOGS_DIR]:
     directory.mkdir(exist_ok=True)
 
 
