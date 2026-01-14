@@ -43,4 +43,6 @@ logs/*
 
 data/
 results/
+results_demo/
 saved_model_files/
+saved_model_files_partition_by_file/

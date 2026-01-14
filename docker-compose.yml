@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   web:
     build: .
@@ -12,7 +10,7 @@ services:
       # - ./data:/app/data:ro
       
       # Mount writable directories for runtime data
-      - ./results:/app/results
+      - ./results_demo:/app/results_demo
       - ./saved_model_files:/app/saved_model_files
       - ./uploads:/app/uploads
       - ./logs:/app/logs

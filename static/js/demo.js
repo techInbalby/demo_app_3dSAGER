@@ -2175,6 +2175,12 @@ function viewResults() {
             pipelineState.step3Completed = true;
             updatePipelineUI();
             
+            // Show summary button after Matching Classifier is completed
+            const summaryBtn = document.getElementById('step-btn-3-summary');
+            if (summaryBtn) {
+                summaryBtn.style.display = 'block';
+            }
+            
             // Update building colors based on match status (use cached data if available)
             updateBuildingColorsForStage3(true, () => {
                 // After bulk update, specifically update the selected building if properties window is open
@@ -2227,12 +2233,21 @@ function updatePipelineUI() {
     // Update step 3
     const step3El = document.getElementById('step-3');
     const step3Status = step3El.querySelector('.step-status');
+    const step3SummaryBtn = document.getElementById('step-btn-3-summary');
     if (pipelineState.step3Completed) {
         step3Status.innerHTML = '✓';
         step3Status.className = 'step-status completed';
+        // Show summary button when step 3 is completed
+        if (step3SummaryBtn) {
+            step3SummaryBtn.style.display = 'block';
+        }
     } else {
         step3Status.innerHTML = '';
         step3Status.className = 'step-status';
+        // Hide summary button when step 3 is not completed
+        if (step3SummaryBtn) {
+            step3SummaryBtn.style.display = 'none';
+        }
     }
 }
 
@@ -2650,51 +2665,168 @@ function showClassifierResultsSummary(data) {
     // Create summary display
     const summary = data.summary || {
         total_buildings: 0,
+        total_buildings_in_file: 0,
+        potential_true_matches: 0,
+        potential_true_matches_not_in_bkafi: 0,
+        buildings_with_true_match_in_bkafi: 0,
+        found_true_matches: 0,
+        recall: 0,
+        overall_recall: 0,
+        blocking_recall: 0,
+        matching_recall: 0,
+        precision: 0,
+        precision_conf_threshold: 0,
+        precision_highest_conf: 0,
+        predicted_with_conf_threshold: 0,
+        predicted_highest_conf: 0,
         true_positive: 0,
         false_positive: 0,
         false_negative: 0,
-        no_pairs_but_exists: 0,
-        success_rate: 0,
-        no_pairs_percentage: 0
+        best_match_true_positives: 0,
+        best_match_false_positives: 0,
+        best_match_false_negative_in_blocking: 0,
+        best_match_false_negative_not_in_blocking: 0,
+        true_matches_not_in_blocking: 0,
+        total_pairs: 0,
+        overall_recall: 0,
+        blocking_recall: 0,
+        matching_recall: 0,
+        f1_score: 0,
+        best_match_f1_score: 0
     };
     
+    // Get file name from selectedFile
+    const fileName = selectedFile ? selectedFile.split('/').pop() : 'Unknown File';
+    
     const summaryHTML = `
-        <div style="padding: 20px;">
-            <h4 style="margin-top: 0; color: #667eea;">Overall Success Rate</h4>
-            <div style="font-size: 32px; font-weight: bold; color: #28a745; margin: 10px 0 5px 0;">
-                ${(summary.success_rate * 100).toFixed(2)}%
-            </div>
-            <div style="font-size: 12px; color: #666; margin-bottom: 20px; font-style: italic;">
-                * Based on true positive / (true positive + false positive + false negative)
+        <div style="padding: 0; box-sizing: border-box;">
+            <h4 style="margin-top: 0; color: #667eea; margin-bottom: 10px;">Matching Results Summary (Per File)</h4>
+            <div style="font-size: 14px; color: #666; margin-bottom: 15px; padding: 8px 12px; background: #f5f5f5; border-radius: 6px; border-left: 3px solid #667eea;">
+                <strong>Selected File:</strong> ${fileName}
             </div>
             
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px;">
-                <div style="background: #e8f5e9; padding: 15px; border-radius: 8px; border-left: 4px solid #4caf50;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">True Positive Pairs</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #4caf50;">${summary.true_positive}</div>
+            <!-- Potential True Matches and BKAFI Coverage -->
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; box-sizing: border-box;">
+                <div style="background: #e3f2fd; padding: 12px; border-radius: 8px; border-left: 4px solid #2196f3; box-sizing: border-box;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Potential True Matches in BKAFI</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #2196f3;">${summary.potential_true_matches}</div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">In BKAFI blocking sets</div>
+                    <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                        Buildings whose ID exists in both Source A (candidates) and Source B (index), and were included in BKAFI blocking sets (have candidate pairs generated). These are potential true matches that went through the full pipeline.
+                    </div>
                 </div>
                 
-                <div style="background: #ffebee; padding: 15px; border-radius: 8px; border-left: 4px solid #f44336;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">False Positive Pairs</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #f44336;">${summary.false_positive}</div>
-                </div>
-                
-                <div style="background: #fff3e0; padding: 15px; border-radius: 8px; border-left: 4px solid #ff9800;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">False Negative Pairs</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${summary.false_negative}</div>
-                </div>
-                
-                <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; border-left: 4px solid #2196f3;">
-                    <div style="font-size: 14px; color: #666; margin-bottom: 5px;">No Pairs (but exists in index)</div>
-                    <div style="font-size: 24px; font-weight: bold; color: #2196f3;">${summary.no_pairs_but_exists}</div>
-                    <div style="font-size: 12px; color: #666; margin-top: 5px;">${(summary.no_pairs_percentage * 100).toFixed(2)}% of total</div>
-                    <div style="font-size: 11px; color: #f44336; margin-top: 5px; font-style: italic;">* Mock data - replace with actual data</div>
+                <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Potential True Matches NOT in BKAFI</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${summary.potential_true_matches_not_in_bkafi}</div>
+                    <div style="font-size: 12px; color: #666; margin-top: 5px;">Not in BKAFI blocking sets</div>
+                    <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                        Buildings whose ID exists in both Source A and Source B, but were NOT included in BKAFI blocking results.
+                    </div>
                 </div>
             </div>
             
-            <div style="background: #f5f5f5; padding: 15px; border-radius: 8px; margin-top: 20px;">
-                <div style="font-size: 14px; color: #666; margin-bottom: 5px;">Total Buildings Analyzed</div>
-                <div style="font-size: 20px; font-weight: bold; color: #333;">${summary.total_buildings}</div>
+            <!-- Recall Metrics -->
+            <div style="margin-bottom: 20px;">
+                <h5 style="color: #667eea; margin-bottom: 10px;">Recall Metrics</h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; box-sizing: border-box;">
+                    <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; border-left: 4px solid #4caf50; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Overall Recall</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #4caf50;">${(summary.overall_recall * 100).toFixed(2)}%</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Of all potential true matches (buildings with ID in both Source A and Source B), how many were correctly identified by the full pipeline (BKAFI blocking + matching classifier).
+                        </div>
+                    </div>
+                    
+                    <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">BKAFI Blocking Recall</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${(summary.blocking_recall * 100).toFixed(2)}%</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Of all potential true matches, how many were included in BKAFI blocking sets (have candidate pairs generated). This measures the blocking step's coverage.
+                        </div>
+                    </div>
+                    
+                    <div style="background: #e3f2fd; padding: 12px; border-radius: 8px; border-left: 4px solid #2196f3; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Matching Recall</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #2196f3;">${(summary.matching_recall * 100).toFixed(2)}%</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Of all potential true matches that were in BKAFI blocking sets, how many were correctly identified by the matching classifier. This measures the classifier's performance on the blocking set.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Precision Metrics -->
+            <div style="margin-bottom: 20px;">
+                <h5 style="color: #667eea; margin-bottom: 10px;">Precision Metrics</h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; box-sizing: border-box;">
+                    <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Precision (confidence > 0.5)</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${(summary.precision_conf_threshold * 100).toFixed(2)}%</div>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">${summary.predicted_with_conf_threshold} predictions</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Pair-level precision when allowing multiple matches per candidate building: among all candidate–index pairs with classifier confidence > 0.5, the fraction that are true matches.
+                        </div>
+                    </div>
+                    
+                    <div style="background: #f3e5f5; padding: 12px; border-radius: 8px; border-left: 4px solid #9c27b0; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">Precision (best match)</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #9c27b0;">${(summary.precision_highest_conf * 100).toFixed(2)}%</div>
+                        <div style="font-size: 12px; color: #666; margin-top: 5px;">${summary.predicted_highest_conf} best matches</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Precision when selecting a single match per candidate building: for each candidate, take the highest-confidence pair; keep it only if confidence > 0.5. This reports how often that top prediction is a true match.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Pair Statistics (Best Match) -->
+            <div style="margin-bottom: 20px;">
+                <h5 style="color: #667eea; margin-bottom: 10px;">Pair Statistics (Best Match Strategy)</h5>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; box-sizing: border-box;">
+                    <div style="background: #e8f5e9; padding: 12px; border-radius: 8px; border-left: 4px solid #4caf50; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">True Positive</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #4caf50;">${summary.best_match_true_positives || summary.true_positive}</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Candidate–index pairs correctly predicted as matches using the best match strategy (highest confidence per candidate with confidence > 0.5) where the candidate and index IDs are identical.
+                        </div>
+                    </div>
+                    
+                    <div style="background: #ffebee; padding: 12px; border-radius: 8px; border-left: 4px solid #f44336; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">False Positive</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #f44336;">${summary.best_match_false_positives || summary.false_positive}</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            Candidate–index pairs incorrectly predicted as matches using the best match strategy (highest confidence per candidate with confidence > 0.5) where the candidate and index IDs are different.
+                        </div>
+                    </div>
+                    
+                    <div style="background: #fff3e0; padding: 12px; border-radius: 8px; border-left: 4px solid #ff9800; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">False Negative (in BKAFI)</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #ff9800;">${summary.best_match_false_negative_in_blocking || 0}</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            True matches (same ID) that were in BKAFI blocking sets but were missed by the best match strategy (highest confidence was ≤ 0.5 or a different pair had higher confidence).
+                        </div>
+                    </div>
+                    
+                    <div style="background: #fff9c4; padding: 12px; border-radius: 8px; border-left: 4px solid #fbc02d; box-sizing: border-box;">
+                        <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">False Negative (not in BKAFI)</div>
+                        <div style="font-size: 24px; font-weight: bold; color: #fbc02d;">${summary.best_match_false_negative_not_in_blocking || 0}</div>
+                        <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                            True matches (same ID) that were not included in BKAFI blocking sets, so they could not be identified by the matching classifier.
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Overall Metrics -->
+            <div style="margin-bottom: 20px;">
+                <div style="background: #f5f5f5; padding: 12px; border-radius: 8px; box-sizing: border-box;">
+                    <div style="font-size: 14px; color: #666; margin-bottom: 5px; font-weight: 600;">F1 Score (Best Match)</div>
+                    <div style="font-size: 24px; font-weight: bold; color: #333;">${(summary.best_match_f1_score * 100).toFixed(2)}%</div>
+                    <div style="font-size: 11px; color: #888; margin-top: 8px; font-style: italic; line-height: 1.4;">
+                        Harmonic mean of precision and recall for the best match strategy (highest confidence per candidate with confidence > 0.5). Provides a balanced evaluation metric that considers both prediction accuracy and coverage.
+                    </div>
+                </div>
             </div>
         </div>
     `;
@@ -2714,6 +2846,45 @@ function showClassifierResultsSummary(data) {
         document.body.appendChild(overlay);
     }
     overlay.classList.add('active');
+}
+
+// Show summary from Step 3 (Matching Classifier)
+function showSummaryFromStep3() {
+    if (!pipelineState.step3Completed) {
+        alert('Please complete Matching Classifier first.');
+        return;
+    }
+    
+    if (!selectedFile) {
+        alert('Please select a file first.');
+        return;
+    }
+    
+    console.log('Loading classifier results summary from Step 3');
+    
+    // Show loading overlay
+    showLoading('Loading classifier results summary...');
+    
+    // Load results summary
+    fetch(`/api/classifier/summary?file=${encodeURIComponent(selectedFile)}`)
+        .then(response => response.json())
+        .then(data => {
+            hideLoading();
+            
+            if (data.error) {
+                console.error('Error loading summary:', data.error);
+                alert('Error loading classifier results summary: ' + data.error);
+                return;
+            }
+            
+            // Show the summary
+            showClassifierResultsSummary(data);
+        })
+        .catch(error => {
+            hideLoading();
+            console.error('Error loading summary:', error);
+            alert('Error loading classifier results summary: ' + error.message);
+        });
 }
 
 // Close results summary window

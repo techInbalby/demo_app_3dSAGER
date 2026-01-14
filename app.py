@@ -19,10 +19,17 @@ Compress(app)
 # Configuration
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
-RESULTS_DIR = BASE_DIR / 'results'
+RESULTS_DIR = BASE_DIR / 'results_demo'
 SAVED_MODEL_DIR = BASE_DIR / 'saved_model_files'
 UPLOADS_DIR = BASE_DIR / 'uploads'
 LOGS_DIR = BASE_DIR / 'logs'
+
+# Results JSON files
+DEMO_RESULTS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_detailed_results_XGBClassifier_seed1.json'
+DEMO_METRICS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_metrics_summary_seed1.json'
+
+# Confidence threshold for predictions (hardcoded, but easy to make configurable)
+CONFIDENCE_THRESHOLD = 0.5
 
 # Ensure directories exist
 for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, UPLOADS_DIR, LOGS_DIR]:
@@ -245,7 +252,7 @@ bkafi_cache = None
 def calculate_all_features():
     """
     Calculate geometric features for all buildings in the selected file
-    Loads from joblib file: data/property_dicts/Hague_130425_test_matching_large_neg_samples_num=2_vector_normalization=True_seed=1.joblib
+    Loads from joblib file: data/property_dicts/Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib
     """
     try:
         data = request.get_json()
@@ -257,7 +264,7 @@ def calculate_all_features():
         print(f"Calculating features for all buildings in file: {file_path}")
         
         # Load from joblib file
-        joblib_path = DATA_DIR / 'property_dicts' / 'Hague_130425_test_matching_large_neg_samples_num=2_vector_normalization=True_seed=1.joblib'
+        joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
         
         if not joblib_path.exists():
             return jsonify({'error': f'Joblib file not found at {joblib_path}'}), 404
@@ -415,7 +422,7 @@ def get_building_features(building_id):
                         return jsonify({'building_id': building_id, 'features': cached_features})
         
         # Try to load from joblib file if not in cache
-        joblib_path = DATA_DIR / 'property_dicts' / 'Hague_130425_test_matching_large_neg_samples_num=2_vector_normalization=True_seed=1.joblib'
+        joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
         
         if joblib_path.exists():
             import joblib
@@ -550,33 +557,40 @@ def get_building_features(building_id):
 @app.route('/api/bkafi/load', methods=['POST'])
 def load_bkafi_results():
     """
-    Load BKAFI prediction results from pkl file
-    Path: results/prediction_results/Hague_matching_BaggingClassifier_seed=1.pkl
+    Load BKAFI prediction results from JSON file
+    Path: results_demo/demo_inference/demo_detailed_results_XGBClassifier_seed1.json
     """
     try:
         global bkafi_cache
         
-        # Load from pkl file
-        pkl_path = RESULTS_DIR / 'prediction_results' / 'Hague_matching_BaggingClassifier_seed=1.pkl'
+        # Load from JSON file
+        if not DEMO_RESULTS_JSON.exists():
+            return jsonify({'error': f'BKAFI results file not found at {DEMO_RESULTS_JSON}'}), 404
         
-        if not pkl_path.exists():
-            return jsonify({'error': f'BKAFI results file not found at {pkl_path}'}), 404
+        with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
+            results_dict = json.load(f)
         
-        import pickle
+        print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
         
-        with open(pkl_path, 'rb') as f:
-            df = pickle.load(f)
+        # The new structure is file-based: {filename: {building_id: {possible_matches: [...]}}}
+        # Flatten it for easier lookup: merge all buildings from all files
+        flattened_cache = {}
+        total_pairs = 0
+        unique_candidates = 0
         
-        print(f"Loaded BKAFI results from: {pkl_path}")
-        print(f"DataFrame shape: {df.shape}")
-        print(f"Columns: {list(df.columns)}")
+        for file_name, file_buildings in results_dict.items():
+            for building_id, building_data in file_buildings.items():
+                flattened_cache[building_id] = building_data
+                unique_candidates += 1
+                total_pairs += len(building_data.get('possible_matches', []))
         
-        # Store in global cache
-        bkafi_cache = df
+        print(f"Number of candidate buildings: {unique_candidates} across {len(results_dict)} files")
         
-        # Return success with summary
-        total_pairs = len(df)
-        unique_candidates = df['Source_Building_ID'].nunique()
+        # Store in global cache (flattened dictionary structure for backward compatibility)
+        bkafi_cache = flattened_cache
+        # Also store the original file-based structure for file-specific lookups
+        if not hasattr(app, 'bkafi_cache_by_file'):
+            app.bkafi_cache_by_file = results_dict
         
         return jsonify({
             'success': True,
@@ -585,6 +599,10 @@ def load_bkafi_results():
             'unique_candidates': int(unique_candidates)
         })
             
+    except json.JSONDecodeError as e:
+        import traceback
+        print(f"Error parsing JSON: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': f'Invalid JSON format: {str(e)}'}), 500
     except Exception as e:
         import traceback
         print(f"Error loading BKAFI results: {e}\n{traceback.format_exc()}")
@@ -873,12 +891,17 @@ def get_building_bkafi(building_id):
         
         if bkafi_cache is None:
             # Try to load if not cached
-            pkl_path = RESULTS_DIR / 'prediction_results' / 'Hague_matching_BaggingClassifier_seed=1.pkl'
-            if pkl_path.exists():
-                import pickle
-                with open(pkl_path, 'rb') as f:
-                    bkafi_cache = pickle.load(f)
-                print(f"Loaded BKAFI results from: {pkl_path}")
+            if DEMO_RESULTS_JSON.exists():
+                with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
+                    results_dict = json.load(f)
+                # Flatten the file-based structure
+                flattened_cache = {}
+                for file_name, file_buildings in results_dict.items():
+                    for building_id, building_data in file_buildings.items():
+                        flattened_cache[building_id] = building_data
+                bkafi_cache = flattened_cache
+                app.bkafi_cache_by_file = results_dict
+                print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
             else:
                 return jsonify({
                     'error': 'BKAFI results not loaded. Please run Step 2 first.',
@@ -896,25 +919,33 @@ def get_building_bkafi(building_id):
         
         print(f"Looking for pairs for candidate building: {numeric_id}")
         
-        # Filter DataFrame for this candidate building (Source_Building_ID)
-        # Try exact match first
-        candidate_pairs = bkafi_cache[bkafi_cache['Source_Building_ID'] == numeric_id]
+        # Lookup candidate building in dictionary (try exact match first)
+        building_data = bkafi_cache.get(numeric_id)
         
-        # If no exact match, try string comparison
-        if len(candidate_pairs) == 0:
-            candidate_pairs = bkafi_cache[
-                bkafi_cache['Source_Building_ID'].astype(str) == numeric_id
-            ]
+        # If no exact match, try to find by string comparison
+        if building_data is None:
+            for candidate_id in bkafi_cache.keys():
+                if str(candidate_id) == numeric_id:
+                    building_data = bkafi_cache[candidate_id]
+                    break
+                # Also try if numeric_id is contained in candidate_id or vice versa
+                if numeric_id in str(candidate_id) or str(candidate_id) in numeric_id:
+                    building_data = bkafi_cache[candidate_id]
+                    break
         
-        # If still no match, try regex search
-        if len(candidate_pairs) == 0:
-            candidate_pairs = bkafi_cache[
-                bkafi_cache['Source_Building_ID'].astype(str).str.contains(numeric_id, regex=False, na=False)
-            ]
+        if building_data is None:
+            print(f"No pairs found for building {building_id} (numeric: {numeric_id})")
+            return jsonify({
+                'building_id': building_id,
+                'pairs': [],
+                'message': f'No BKAFI pairs found for building {building_id}'
+            })
         
-        print(f"Found {len(candidate_pairs)} pairs for building {building_id} (numeric: {numeric_id})")
+        # Extract possible_matches array
+        possible_matches = building_data.get('possible_matches', [])
+        print(f"Found {len(possible_matches)} pairs for building {building_id} (numeric: {numeric_id})")
         
-        if len(candidate_pairs) == 0:
+        if len(possible_matches) == 0:
             return jsonify({
                 'building_id': building_id,
                 'pairs': [],
@@ -923,17 +954,18 @@ def get_building_bkafi(building_id):
         
         # Convert to list of dictionaries
         pairs = []
-        for _, row in candidate_pairs.iterrows():
+        for match in possible_matches:
             pair = {
-                'candidate_id': str(row['Source_Building_ID']),
-                'index_id': str(row['Candidate_Building_ID']),
-                'prediction': int(row['Is_Match_Prediction']) if pd.notna(row['Is_Match_Prediction']) else 0,
-                'true_label': int(row['Is_Match_True_Label']) if pd.notna(row['Is_Match_True_Label']) else None
+                'candidate_id': numeric_id,
+                'index_id': str(match.get('index_id', '')),
+                'prediction': int(match.get('predicted_label', 0)) if match.get('predicted_label') is not None else (1 if match.get('confidence', 0) > CONFIDENCE_THRESHOLD else 0),
+                'true_label': int(match.get('true_label', 0)) if match.get('true_label') is not None else None,
+                'confidence': float(match.get('confidence', 0))
             }
             pairs.append(pair)
         
-        # Sort by prediction (1 first, then 0) and limit to top pairs
-        pairs.sort(key=lambda x: x['prediction'], reverse=True)
+        # Sort by confidence (descending) instead of prediction
+        pairs.sort(key=lambda x: x.get('confidence', 0), reverse=True)
         
         return jsonify({
             'building_id': building_id,
@@ -951,42 +983,92 @@ def get_building_bkafi(building_id):
 def get_building_matches(building_id):
     """
     Get matches for a specific building from prediction results
+    Uses the same data as get_building_bkafi() - returns matches with predicted_label=1
     Query params: file (the selected file path)
     """
     try:
+        global bkafi_cache
         file_path = request.args.get('file', '')
         print(f"Getting matches for building {building_id} from file {file_path}")
         
-        # TODO: Load from prediction results pkl
-        # Expected path: data/results/{file_name}/prediction_results.pkl
-        # or data/saved_model_files/{file_name}/matches.pkl
+        if bkafi_cache is None:
+            # Try to load if not cached
+            if DEMO_RESULTS_JSON.exists():
+                with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
+                    results_dict = json.load(f)
+                # Flatten the file-based structure
+                flattened_cache = {}
+                for file_name, file_buildings in results_dict.items():
+                    for building_id, building_data in file_buildings.items():
+                        flattened_cache[building_id] = building_data
+                bkafi_cache = flattened_cache
+                app.bkafi_cache_by_file = results_dict
+                print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
+            else:
+                return jsonify({
+                    'error': 'BKAFI results not loaded. Please run Step 2 first.',
+                    'matches': []
+                }), 404
         
-        # Try to load from results
-        import pickle
-        results_path = RESULTS_DIR / Path(file_path).stem / 'prediction_results.pkl'
-        
-        if results_path.exists():
-            with open(results_path, 'rb') as f:
-                results = pickle.load(f)
-            print(f"Loaded matches from: {results_path}")
-            # Extract matches for this building
-            # This depends on your data structure
-            matches = []  # Extract from results
-            return jsonify({'building_id': building_id, 'matches': matches})
+        # Extract numeric ID from building_id
+        import re
+        numeric_match = re.search(r'(\d{10,})', str(building_id))
+        if numeric_match:
+            numeric_id = numeric_match.group(1)
         else:
-            # Fallback: return mock data
-            print(f"Matches not found at {results_path}, using mock data")
-            mock_matches = [
-                {
-                    'id': f'match_{building_id}_1',
-                    'building_id': f'B_{building_id}',
-                    'source': 'Source B',
-                    'confidence': 0.85,
-                    'similarity': 0.87,
-                    'features': 'Geometric similarity: 0.87'
+            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = str(numeric_id)
+        
+        # Lookup candidate building in dictionary
+        building_data = bkafi_cache.get(numeric_id)
+        
+        # If no exact match, try to find by string comparison
+        if building_data is None:
+            for candidate_id in bkafi_cache.keys():
+                if str(candidate_id) == numeric_id:
+                    building_data = bkafi_cache[candidate_id]
+                    break
+                if numeric_id in str(candidate_id) or str(candidate_id) in numeric_id:
+                    building_data = bkafi_cache[candidate_id]
+                    break
+        
+        if building_data is None:
+            return jsonify({
+                'building_id': building_id,
+                'matches': [],
+                'message': f'No matches found for building {building_id}'
+            })
+        
+        # Extract possible_matches and filter for predicted matches (predicted_label=1 or confidence > threshold)
+        possible_matches = building_data.get('possible_matches', [])
+        matches = []
+        
+        for match in possible_matches:
+            # Get predicted_label or calculate from confidence
+            predicted_label = match.get('predicted_label')
+            if predicted_label is None:
+                predicted_label = 1 if match.get('confidence', 0) > CONFIDENCE_THRESHOLD else 0
+            else:
+                predicted_label = int(predicted_label)
+            
+            # Only include matches with predicted_label=1
+            if predicted_label == 1:
+                match_data = {
+                    'id': match.get('index_id', ''),
+                    'building_id': str(match.get('index_id', '')),
+                    'source': 'Source B',  # Index buildings are from Source B
+                    'confidence': float(match.get('confidence', 0)),
+                    'true_label': int(match.get('true_label', 0)) if match.get('true_label') is not None else None
                 }
-            ]
-            return jsonify({'building_id': building_id, 'matches': mock_matches})
+                matches.append(match_data)
+        
+        # Sort by confidence (descending)
+        matches.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+        
+        return jsonify({
+            'building_id': building_id,
+            'matches': matches
+        })
             
     except Exception as e:
         import traceback
@@ -1019,35 +1101,45 @@ def get_all_buildings_status():
         # 2. Check which buildings have BKAFI pairs
         has_pairs = set()
         if bkafi_cache is not None:
-            # Get all unique Source_Building_ID values
-            if 'Source_Building_ID' in bkafi_cache.columns:
-                # Extract numeric IDs and store both numeric and full format
-                for bid in bkafi_cache['Source_Building_ID'].unique():
-                    bid_str = str(bid)
-                    has_pairs.add(bid_str)
-                    # Also add numeric version for matching
-                    numeric_match = re.search(r'(\d{10,})', bid_str)
-                    if numeric_match:
-                        has_pairs.add(numeric_match.group(1))
+            # Get all unique candidate building IDs from dictionary keys
+            for candidate_id in bkafi_cache.keys():
+                bid_str = str(candidate_id)
+                has_pairs.add(bid_str)
+                # Also add numeric version for matching
+                numeric_match = re.search(r'(\d{10,})', bid_str)
+                if numeric_match:
+                    has_pairs.add(numeric_match.group(1))
         
         # 3. Check match status (true match, false positive, no match)
         # For each building, check all its pairs to determine overall status
         match_status = {}  # building_id -> 'true_match', 'false_positive', 'no_match'
         if bkafi_cache is not None:
-            # Group by Source_Building_ID to check all pairs for each building
-            for source_id, group in bkafi_cache.groupby('Source_Building_ID'):
-                source_id_str = str(source_id)
+            # Iterate over dictionary keys (candidate building IDs)
+            for candidate_id, building_data in bkafi_cache.items():
+                source_id_str = str(candidate_id)
+                
+                # Get possible_matches array
+                possible_matches = building_data.get('possible_matches', [])
+                building_has_pairs = len(possible_matches) > 0
                 
                 # Check all pairs for this building
                 has_true_match = False
                 has_false_positive = False
-                building_has_pairs = len(group) > 0  # Use different variable name to avoid shadowing outer has_pairs
                 
-                for _, row in group.iterrows():
-                    prediction = int(row['Is_Match_Prediction']) if pd.notna(row['Is_Match_Prediction']) else 0
-                    true_label = int(row['Is_Match_True_Label']) if pd.notna(row['Is_Match_True_Label']) else None
+                for match in possible_matches:
+                    # Get predicted_label or calculate from confidence
+                    predicted_label = match.get('predicted_label')
+                    if predicted_label is None:
+                        predicted_label = 1 if match.get('confidence', 0) > CONFIDENCE_THRESHOLD else 0
+                    else:
+                        predicted_label = int(predicted_label)
                     
-                    if prediction == 1:
+                    # Get true_label (do not use is_match as it's redundant)
+                    true_label = match.get('true_label')
+                    if true_label is not None:
+                        true_label = int(true_label)
+                    
+                    if predicted_label == 1:
                         if true_label == 1:
                             has_true_match = True
                         elif true_label == 0:
@@ -1055,11 +1147,10 @@ def get_all_buildings_status():
                 
                 # Determine overall status for this building based on ALL pairs
                 # Priority: true_match > false_positive > no_match
-                # This uses data from results/prediction_results/Hague_matching_BaggingClassifier_seed=1.pkl
                 if has_true_match:
-                    status = 'true_match'  # At least one pair with prediction=1 and true_label=1
+                    status = 'true_match'  # At least one pair with predicted_label=1 and true_label=1
                 elif has_false_positive:
-                    status = 'false_positive'  # At least one pair with prediction=1 and true_label=0
+                    status = 'false_positive'  # At least one pair with predicted_label=1 and true_label=0
                 elif building_has_pairs:
                     # Has pairs but all predictions are 0, or prediction=1 with unknown true_label
                     status = 'no_match'
@@ -1102,7 +1193,7 @@ def get_all_buildings_status():
 @app.route('/api/classifier/summary', methods=['GET'])
 def get_classifier_summary():
     """
-    Get classifier results summary with success rates
+    Get classifier results summary with success rates calculated per file
     Query params: file (the selected file path)
     """
     try:
@@ -1112,65 +1203,143 @@ def get_classifier_summary():
         
         print(f"Getting classifier summary for file: {file_path}")
         
-        # Initialize counters
-        total_buildings = 0
-        true_positive = 0
-        false_positive = 0
-        false_negative = 0
-        no_pairs_but_exists = 0
+        # Load metrics summary JSON
+        if not DEMO_METRICS_JSON.exists():
+            return jsonify({'error': f'Metrics summary file not found at {DEMO_METRICS_JSON}'}), 404
         
-        # Get all building IDs from the loaded file (if available)
-        # For now, we'll use BKAFI cache to determine total buildings
-        if bkafi_cache is not None and 'Source_Building_ID' in bkafi_cache.columns:
-            unique_buildings = set(str(bid) for bid in bkafi_cache['Source_Building_ID'].unique())
-            total_buildings = len(unique_buildings)
-            
-            # Count match types - count each pair (not each building)
-            # True positive: prediction=1 and true_label=1
-            # False positive: prediction=1 and true_label=0
-            # False negative: prediction=0 and true_label=1
-            for _, row in bkafi_cache.iterrows():
-                prediction = int(row['Is_Match_Prediction']) if pd.notna(row['Is_Match_Prediction']) else 0
-                true_label = int(row['Is_Match_True_Label']) if pd.notna(row['Is_Match_True_Label']) else None
-                
-                if prediction == 1 and true_label == 1:
-                    true_positive += 1
-                elif prediction == 1 and true_label == 0:
-                    false_positive += 1
-                elif prediction == 0 and true_label == 1:
-                    false_negative += 1
+        with open(DEMO_METRICS_JSON, 'r', encoding='utf-8') as f:
+            metrics_data = json.load(f)
         
-        # Calculate success rate
-        total_pairs = true_positive + false_positive + false_negative
-        success_rate = true_positive / total_pairs if total_pairs > 0 else 0
+        # Extract model metrics (XGBClassifier)
+        model_name = 'XGBClassifier'
+        if model_name not in metrics_data:
+            return jsonify({'error': f'Model {model_name} not found in metrics file'}), 404
         
-        # Calculate percentage of buildings with no pairs but right one exists in index
-        # NOTE: This is currently using mock data - replace with actual data when available
-        buildings_with_pairs = set()
-        if bkafi_cache is not None and 'Source_Building_ID' in bkafi_cache.columns:
-            buildings_with_pairs = set(str(bid) for bid in bkafi_cache['Source_Building_ID'].unique())
+        model_metrics = metrics_data[model_name]
+        file_metrics = model_metrics.get('file_metrics', {})
         
-        # Mock: assume 10% of buildings without pairs have the right match in index
-        # TODO: Replace with actual data from provided file
-        no_pairs_count = max(0, total_buildings - len(buildings_with_pairs))
-        no_pairs_but_exists = int(no_pairs_count * 0.1)  # Mock: 10% of no-pair buildings
-        no_pairs_percentage = no_pairs_but_exists / total_buildings if total_buildings > 0 else 0
+        # Get file name to match against file_metrics keys
+        file_name = Path(file_path).name
         
-        # Mark which fields are mock data
-        is_mock = {
-            'no_pairs_but_exists': True,  # This is mock data
-            'no_pairs_percentage': True   # This is mock data
-        }
+        # Find matching file in file_metrics (try exact match first, then partial)
+        file_metric_data = None
+        for key in file_metrics.keys():
+            if key == file_name or file_name in key or key in file_name:
+                file_metric_data = file_metrics[key]
+                print(f"Found metrics for file: {key}")
+                break
+        
+        if not file_metric_data:
+            return jsonify({'error': f'No metrics found for file: {file_name}'}), 404
+        
+        # Use metrics from JSON file
+        potential_matches_in_index = file_metric_data.get('potential_matches_in_index', 0)
+        potential_matches_in_blocking = file_metric_data.get('potential_matches_in_blocking', 0)
+        potential_true_matches = potential_matches_in_blocking  # In BKAFI sets
+        potential_true_matches_not_in_bkafi = potential_matches_in_index - potential_matches_in_blocking  # NOT in BKAFI sets
+        
+        # Threshold metrics (confidence > 0.5)
+        threshold_precision = file_metric_data.get('threshold_precision', 0.0)
+        threshold_recall_overall = file_metric_data.get('threshold_recall_overall', 0.0)
+        threshold_recall_blocking = file_metric_data.get('threshold_recall_blocking', 0.0)
+        threshold_recall_matching = file_metric_data.get('threshold_recall_matching', 0.0)
+        threshold_f1_score = file_metric_data.get('threshold_f1_score', 0.0)
+        threshold_true_positives = file_metric_data.get('threshold_true_positives', 0)
+        threshold_false_positives = file_metric_data.get('threshold_false_positives', 0)
+        threshold_false_negatives = file_metric_data.get('threshold_total_false_negatives', 0)
+        threshold_false_negatives_in_blocking = file_metric_data.get('threshold_false_negatives_in_blocking', 0)
+        threshold_false_negatives_not_in_blocking = file_metric_data.get('threshold_false_negatives_not_in_blocking', 0)
+        
+        # Best match metrics (highest confidence)
+        best_match_precision = file_metric_data.get('best_match_precision', 0.0)
+        best_match_recall_overall = file_metric_data.get('best_match_recall_overall', 0.0)
+        best_match_recall_blocking = file_metric_data.get('best_match_recall_blocking', 0.0)
+        best_match_recall_matching = file_metric_data.get('best_match_recall_matching', 0.0)
+        best_match_f1_score = file_metric_data.get('best_match_f1_score', 0.0)
+        best_match_true_positives = file_metric_data.get('best_match_true_positives', 0)
+        best_match_false_positives = file_metric_data.get('best_match_false_positives', 0)
+        best_match_false_negatives = file_metric_data.get('best_match_total_false_negatives', 0)
+        best_match_false_negatives_in_blocking = file_metric_data.get('best_match_false_negatives_in_blocking', 0)
+        best_match_false_negatives_not_in_blocking = file_metric_data.get('best_match_false_negatives_not_in_blocking', 0)
+        
+        # Calculate found true matches (true positives for threshold)
+        found_true_matches = threshold_true_positives
+        
+        # Calculate total pairs from detailed results (need to load BKAFI cache for this)
+        global bkafi_cache
+        if bkafi_cache is None:
+            if DEMO_RESULTS_JSON.exists():
+                with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
+                    results_dict = json.load(f)
+                # Flatten the file-based structure
+                flattened_cache = {}
+                for fname, file_buildings in results_dict.items():
+                    for building_id, building_data in file_buildings.items():
+                        flattened_cache[building_id] = building_data
+                bkafi_cache = flattened_cache
+                app.bkafi_cache_by_file = results_dict
+        
+        # Count total pairs for this file
+        total_pairs = 0
+        if hasattr(app, 'bkafi_cache_by_file') and app.bkafi_cache_by_file and file_name in app.bkafi_cache_by_file:
+            for building_data in app.bkafi_cache_by_file[file_name].values():
+                total_pairs += len(building_data.get('possible_matches', []))
+        
+        # Get total buildings in file
+        candidates_in_file = file_metric_data.get('candidates_in_file', 0)
+        
+        # Recall metrics (from threshold metrics)
+        recall = threshold_recall_matching  # Matching recall for backward compatibility
+        overall_recall = threshold_recall_overall
+        blocking_recall = threshold_recall_blocking
+        matching_recall = threshold_recall_matching
+        
+        # Precision metrics
+        precision = threshold_precision
+        precision_conf_threshold = threshold_precision
+        precision_highest_conf = best_match_precision
+        
+        # Predicted counts (approximate from true_positives + false_positives)
+        predicted_with_conf_threshold = threshold_true_positives + threshold_false_positives
+        predicted_highest_conf = best_match_true_positives + best_match_false_positives
+        
+        # True matches not in blocking
+        true_matches_not_in_blocking = threshold_false_negatives_not_in_blocking
         
         summary = {
-            'total_buildings': total_buildings,
-            'true_positive': true_positive,
-            'false_positive': false_positive,
-            'false_negative': false_negative,
-            'no_pairs_but_exists': no_pairs_but_exists,
-            'success_rate': success_rate,
-            'no_pairs_percentage': no_pairs_percentage,
-            'is_mock': is_mock  # Indicate which fields are mock data
+            'total_buildings': candidates_in_file,  # Buildings in file that are in BKAFI results
+            'total_buildings_in_file': candidates_in_file,  # Total candidates in file
+            'potential_true_matches': potential_true_matches,  # Potential true matches IN BKAFI sets
+            'potential_true_matches_not_in_bkafi': potential_true_matches_not_in_bkafi,  # Potential true matches NOT in BKAFI sets
+            'buildings_with_true_match_in_bkafi': potential_matches_in_blocking,  # Buildings with true match in BKAFI blocking
+            'found_true_matches': found_true_matches,
+            'recall': recall,
+            'precision': precision,
+            'precision_conf_threshold': precision_conf_threshold,
+            'precision_highest_conf': precision_highest_conf,
+            'predicted_with_conf_threshold': predicted_with_conf_threshold,
+            'predicted_highest_conf': predicted_highest_conf,
+            'true_positive': threshold_true_positives,
+            'false_positive': threshold_false_positives,
+            'false_negative': threshold_false_negatives,
+            'false_negative_in_blocking': threshold_false_negatives_in_blocking,
+            'false_negative_not_in_blocking': threshold_false_negatives_not_in_blocking,
+            'best_match_false_negative_in_blocking': best_match_false_negatives_in_blocking,
+            'best_match_false_negative_not_in_blocking': best_match_false_negatives_not_in_blocking,
+            'best_match_total_false_negatives': best_match_false_negatives,
+            'true_matches_not_in_blocking': true_matches_not_in_blocking,
+            'total_pairs': total_pairs,
+            'overall_recall': overall_recall,
+            'blocking_recall': blocking_recall,
+            'matching_recall': matching_recall,
+            'f1_score': best_match_f1_score,  # Use best match F1 score
+            'best_match_precision': best_match_precision,
+            'best_match_recall_overall': best_match_recall_overall,
+            'best_match_recall_blocking': best_match_recall_blocking,
+            'best_match_recall_matching': best_match_recall_matching,
+            'best_match_f1_score': best_match_f1_score,
+            'best_match_true_positives': best_match_true_positives,
+            'best_match_false_positives': best_match_false_positives
         }
         
         return jsonify({
@@ -1178,6 +1347,10 @@ def get_classifier_summary():
             'summary': summary
         })
         
+    except json.JSONDecodeError as e:
+        import traceback
+        print(f"Error parsing JSON: {e}\n{traceback.format_exc()}")
+        return jsonify({'error': f'Invalid JSON format: {str(e)}'}), 500
     except Exception as e:
         import traceback
         print(f"Error getting classifier summary: {e}\n{traceback.format_exc()}")

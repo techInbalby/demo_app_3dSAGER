@@ -496,9 +496,9 @@ body {
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 600px;
-    max-width: 90vw;
-    max-height: 80vh;
+    width: 700px;
+    max-width: 95vw;
+    max-height: 90vh;
     background: white;
     border-radius: 12px;
     box-shadow: 0 10px 40px rgba(0,0,0,0.3);
@@ -548,7 +548,34 @@ body {
 .matches-content {
     padding: 20px;
     overflow-y: auto;
+    overflow-x: hidden;
     flex: 1;
+    max-height: calc(90vh - 80px); /* Account for header height */
+    box-sizing: border-box;
+}
+
+.matches-content > * {
+    box-sizing: border-box;
+    max-width: 100%;
+}
+
+/* Custom scrollbar for matches content */
+.matches-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+.matches-content::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.matches-content::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+.matches-content::-webkit-scrollbar-thumb:hover {
+    background: #555;
 }
 
 .building-info {
