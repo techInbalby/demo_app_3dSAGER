@@ -3,7 +3,7 @@ services:
     build: .
     container_name: demo_app_3dsager
     ports:
-      - "5001:5000"
+      - "5000:5000"
     volumes:
       # Data is copied into image during build to avoid OneDrive file locking issues
       # Uncomment the line below ONLY if you need to update data without rebuilding
@@ -14,9 +14,9 @@ services:
       - ./saved_model_files:/app/saved_model_files
       - ./logs:/app/logs
     environment:
-      - FLASK_ENV=development
+      #- FLASK_ENV=development
       - FLASK_APP=app.py
-      - FLASK_DEBUG=1
+      #- FLASK_DEBUG=1
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/')"]
