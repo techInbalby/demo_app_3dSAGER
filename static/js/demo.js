@@ -112,6 +112,148 @@ const tutorialSteps = [
     }
 ];
 
+// Mobile panel state
+let mobilePanelState = {
+    open: false,
+    sectionId: null,
+    sectionEl: null,
+    originalParent: null,
+    originalNextSibling: null
+};
+
+function isMobileView() {
+    return window.matchMedia && window.matchMedia('(max-width: 768px)').matches;
+}
+
+function initMobilePanelControls() {
+    const buttons = document.querySelectorAll('.mobile-action-btn');
+    buttons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const targetId = btn.getAttribute('data-target');
+            const title = btn.getAttribute('data-title') || 'Panel';
+            openMobilePanel(targetId, title);
+        });
+    });
+
+    const overlay = document.getElementById('mobile-panel-overlay');
+    if (overlay) {
+        overlay.addEventListener('click', closeMobilePanel);
+    }
+
+    window.addEventListener('resize', () => {
+        if (!isMobileView() && mobilePanelState.open) {
+            closeMobilePanel();
+        }
+    });
+}
+
+function openMobilePanel(sectionId, title) {
+    if (!isMobileView()) {
+        return;
+    }
+
+    const panel = document.getElementById('mobile-panel');
+    const overlay = document.getElementById('mobile-panel-overlay');
+    const panelBody = document.getElementById('mobile-panel-body');
+    const panelTitle = document.getElementById('mobile-panel-title');
+    const sectionEl = document.getElementById(sectionId);
+
+    if (!panel || !overlay || !panelBody || !sectionEl) {
+        return;
+    }
+
+    if (mobilePanelState.open) {
+        closeMobilePanel();
+    }
+
+    mobilePanelState.open = true;
+    mobilePanelState.sectionId = sectionId;
+    mobilePanelState.sectionEl = sectionEl;
+    mobilePanelState.originalParent = sectionEl.parentNode;
+    mobilePanelState.originalNextSibling = sectionEl.nextSibling;
+
+    panelTitle.textContent = title;
+    panelBody.appendChild(sectionEl);
+    overlay.style.display = 'block';
+    panel.style.display = 'flex';
+    document.body.classList.add('mobile-panel-open');
+
+    if (sectionId === 'location-section' && locationMap) {
+        setTimeout(() => {
+            locationMap.invalidateSize();
+        }, 200);
+    }
+
+    if (sectionId === 'viewer-section' && window.viewer && window.viewer.viewer) {
+        setTimeout(() => {
+            if (window.viewer.viewer.resize) {
+                window.viewer.viewer.resize();
+            }
+            if (window.viewer.viewer.scene && window.viewer.viewer.scene.requestRender) {
+                window.viewer.viewer.scene.requestRender();
+            }
+        }, 200);
+    }
+}
+
+function closeMobilePanel() {
+    if (!mobilePanelState.open) {
+        return;
+    }
+
+    const panel = document.getElementById('mobile-panel');
+    const overlay = document.getElementById('mobile-panel-overlay');
+
+    const { sectionEl, originalParent, originalNextSibling } = mobilePanelState;
+    if (sectionEl && originalParent) {
+        if (originalNextSibling && originalNextSibling.parentNode === originalParent) {
+            originalParent.insertBefore(sectionEl, originalNextSibling);
+        } else {
+            originalParent.appendChild(sectionEl);
+        }
+    }
+
+    if (overlay) {
+        overlay.style.display = 'none';
+    }
+    if (panel) {
+        panel.style.display = 'none';
+    }
+
+    document.body.classList.remove('mobile-panel-open');
+
+    if (mobilePanelState.sectionId === 'location-section' && locationMap) {
+        setTimeout(() => {
+            locationMap.invalidateSize();
+        }, 200);
+    }
+
+    if (mobilePanelState.sectionId === 'viewer-section' && window.viewer && window.viewer.viewer) {
+        setTimeout(() => {
+            if (window.viewer.viewer.resize) {
+                window.viewer.viewer.resize();
+            }
+            if (window.viewer.viewer.scene && window.viewer.viewer.scene.requestRender) {
+                window.viewer.viewer.scene.requestRender();
+            }
+        }, 200);
+    }
+
+    mobilePanelState = {
+        open: false,
+        sectionId: null,
+        sectionEl: null,
+        originalParent: null,
+        originalNextSibling: null
+    };
+}
+
+function closeMobilePanelIfOpen(sectionId) {
+    if (mobilePanelState.open && mobilePanelState.sectionId === sectionId) {
+        closeMobilePanel();
+    }
+}
+
 // Show tutorial on first visit
 function showWelcomeGuideIfNeeded() {
     const dontShowAgain = localStorage.getItem('3dSAGER_dontShowTutorial');
@@ -138,6 +280,7 @@ function showTutorial() {
     const tutorialGuide = document.getElementById('tutorial-guide');
     if (tutorialGuide) {
         tutorialGuide.style.display = 'flex';
+        document.body.classList.add('tutorial-open');
         // Don't reset step if tutorial was just hidden (allow continuation)
         if (tutorialState.completed) {
             tutorialState.completed = false;
@@ -186,8 +329,8 @@ function updateTutorialStep() {
             nextBtn.disabled = false;
         } else {
             nextBtn.textContent = 'Next';
-            // Enable Next button if action is completed or no action required
-            nextBtn.disabled = step.waitForAction && !checkTutorialAction(step.waitForAction);
+            // Always allow Next, even if the step action is not completed
+            nextBtn.disabled = false;
         }
         nextBtn.style.display = 'inline-block';
     }
@@ -386,6 +529,7 @@ function hideTutorialForNow() {
     if (highlight) {
         highlight.style.display = 'none';
     }
+    document.body.classList.remove('tutorial-open');
     // Don't mark as completed - user can bring it back
 }
 
@@ -415,6 +559,7 @@ function closeTutorialGuide() {
     if (highlight) {
         highlight.style.display = 'none';
     }
+    document.body.classList.remove('tutorial-open');
     tutorialState.completed = true;
 }
 
@@ -426,6 +571,7 @@ document.addEventListener('DOMContentLoaded', function() {
     updatePipelineUI(); // Initialize pipeline UI
     showWelcomeGuideIfNeeded(); // Show tutorial if needed
     setupWelcomeGuideClickHandlers(); // Setup click handlers for tutorial
+    initMobilePanelControls();
 });
 
 // Setup click handlers for tutorial guide
@@ -488,6 +634,8 @@ function showSource(source) {
 // Select a file
 function selectFile(filePath, source) {
     console.log('Selecting file:', filePath, source);
+
+    closeMobilePanelIfOpen('file-selection-section');
     
     // Allow selecting from any source (Candidates or Index)
     // Users can view files from both sources in any order
@@ -785,6 +933,7 @@ function loadFileInViewer(filePath) {
 
 // Show building properties window
 function showBuildingProperties(buildingId, cityObject) {
+    closeMobilePanel();
     // Update tutorial state when building is clicked
     if (!tutorialState.completed) {
         tutorialState.buildingClicked = true;
@@ -918,6 +1067,56 @@ function calculateGeometricFeatures() {
     
     // Show loading overlay
     showLoading('Calculating geometric features for all buildings...');
+
+    const handleFeatureSuccess = (message) => {
+        console.log('Features calculated:', message);
+        
+        // Update loading message
+        showLoading('Updating building colors...');
+        
+        // Mark step 1 as completed
+        pipelineState.step1Completed = true;
+        featuresLoaded = true;
+        updatePipelineUI();
+        
+        // Enable step 2
+        document.getElementById('step-btn-2').disabled = false;
+        
+        stepBtn.textContent = 'Completed';
+        stepBtn.style.background = '#28a745';
+        
+        // Update building colors based on features (use cached data if available, otherwise fetch)
+        updateBuildingColorsForStage1(true, () => {
+            // After bulk update, specifically update the selected building if properties window is open
+            if (selectedBuildingId) {
+                updateSelectedBuildingColor();
+            }
+            // Hide loading when color update completes
+            hideLoading();
+        });
+        
+        // If building properties window is open, show features
+        if (selectedBuildingId) {
+            loadBuildingFeatures(selectedBuildingId);
+        }
+        
+        if (calcBtn) {
+            calcBtn.textContent = 'Features Calculated';
+            calcBtn.style.background = '#28a745';
+        }
+    };
+
+    const handleFeatureError = (errorMessage) => {
+        console.error('Error calculating features:', errorMessage);
+        hideLoading();
+        alert('Error calculating geometric features: ' + errorMessage);
+        stepBtn.textContent = 'Calculate Features';
+        stepBtn.disabled = false;
+        if (calcBtn) {
+            calcBtn.textContent = 'Calculate Geometric Features';
+            calcBtn.disabled = false;
+        }
+    };
     
     // Call API to calculate features for all buildings
     fetch('/api/features/calculate', {
@@ -925,67 +1124,27 @@ function calculateGeometricFeatures() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ file_path: selectedFile })
     })
-        .then(response => response.json())
-        .then(data => {
+        .then(response => response.json().then(data => ({ status: response.status, data })))
+        .then(({ status, data }) => {
             if (data.error) {
-                console.error('Error calculating features:', data.error);
-                hideLoading();
-                alert('Error calculating geometric features: ' + data.error);
-                stepBtn.textContent = 'Calculate Features';
-                stepBtn.disabled = false;
-                if (calcBtn) {
-                    calcBtn.textContent = 'Calculate Geometric Features';
-                    calcBtn.disabled = false;
-                }
+                handleFeatureError(data.error);
                 return;
             }
-            
-            console.log('Features calculated:', data.message);
-            
-            // Update loading message
-            showLoading('Updating building colors...');
-            
-            // Mark step 1 as completed
-            pipelineState.step1Completed = true;
-            featuresLoaded = true;
-            updatePipelineUI();
-            
-            // Enable step 2
-            document.getElementById('step-btn-2').disabled = false;
-            
-            stepBtn.textContent = 'Completed';
-            stepBtn.style.background = '#28a745';
-            
-            // Update building colors based on features (use cached data if available, otherwise fetch)
-            updateBuildingColorsForStage1(true, () => {
-                // After bulk update, specifically update the selected building if properties window is open
-                if (selectedBuildingId) {
-                    updateSelectedBuildingColor();
-                }
-                // Hide loading when color update completes
-                hideLoading();
-            });
-            
-            // If building properties window is open, show features
-            if (selectedBuildingId) {
-                loadBuildingFeatures(selectedBuildingId);
+
+            if (status === 202 && data.job_id) {
+                showLoading('Calculating geometric features (queued)...');
+                pollJobStatus(
+                    data.job_id,
+                    () => handleFeatureSuccess('Features calculated'),
+                    handleFeatureError
+                );
+                return;
             }
-            
-            if (calcBtn) {
-                calcBtn.textContent = 'Features Calculated';
-                calcBtn.style.background = '#28a745';
-            }
+
+            handleFeatureSuccess(data.message || 'Features calculated');
         })
         .catch(error => {
-            console.error('Error calculating features:', error);
-            hideLoading();
-            alert('Error calculating geometric features: ' + error.message);
-            stepBtn.textContent = 'Calculate Features';
-            stepBtn.disabled = false;
-            if (calcBtn) {
-                calcBtn.textContent = 'Calculate Geometric Features';
-                calcBtn.disabled = false;
-            }
+            handleFeatureError(error.message);
         });
 }
 
@@ -1163,68 +1322,82 @@ function runBKAFI() {
     
     // Show loading overlay
     showLoading('Loading BKAFI results...');
+
+    const handleBkafiSuccess = (message) => {
+        console.log('BKAFI results loaded:', message);
+        
+        // Update loading message
+        showLoading('Updating building colors...');
+        
+        // Mark step 2 as completed
+        pipelineState.step2Completed = true;
+        bkafiLoaded = true;
+        updatePipelineUI();
+        
+        // Enable step 3
+        document.getElementById('step-btn-3').disabled = false;
+        
+        stepBtn.textContent = 'Completed';
+        stepBtn.style.background = '#28a745';
+        
+        // Update building colors based on BKAFI pairs (use cached data if available)
+        updateBuildingColorsForStage2(true, () => {
+            // After bulk update, specifically update the selected building if properties window is open
+            if (selectedBuildingId) {
+                updateSelectedBuildingColor();
+            }
+            // Hide loading when color update completes
+            hideLoading();
+        });
+        
+        // Update BKAFI button in properties window if open
+        const bkafiBtn = document.getElementById('run-bkafi-btn');
+        if (bkafiBtn) {
+            bkafiBtn.disabled = true;
+            bkafiBtn.textContent = 'BKAFI Completed';
+            bkafiBtn.style.background = '#28a745';
+        }
+        
+        // If building properties window is open, load BKAFI pairs
+        if (selectedBuildingId) {
+            loadBuildingBkafiPairs(selectedBuildingId);
+        }
+    };
+
+    const handleBkafiError = (errorMessage) => {
+        console.error('Error loading BKAFI results:', errorMessage);
+        hideLoading();
+        alert('Error loading BKAFI results: ' + errorMessage);
+        stepBtn.textContent = 'Run BKAFI';
+        stepBtn.disabled = false;
+    };
     
     // Call API to load BKAFI results from pkl file
     fetch('/api/bkafi/load', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' }
     })
-        .then(response => response.json())
-        .then(data => {
+        .then(response => response.json().then(data => ({ status: response.status, data })))
+        .then(({ status, data }) => {
             if (data.error) {
-                console.error('Error loading BKAFI results:', data.error);
-                hideLoading();
-                alert('Error loading BKAFI results: ' + data.error);
-                stepBtn.textContent = 'Run BKAFI';
-                stepBtn.disabled = false;
+                handleBkafiError(data.error);
                 return;
             }
-            
-            console.log('BKAFI results loaded:', data.message);
-            
-            // Update loading message
-            showLoading('Updating building colors...');
-            
-            // Mark step 2 as completed
-            pipelineState.step2Completed = true;
-            bkafiLoaded = true;
-            updatePipelineUI();
-            
-            // Enable step 3
-            document.getElementById('step-btn-3').disabled = false;
-            
-            stepBtn.textContent = 'Completed';
-            stepBtn.style.background = '#28a745';
-            
-            // Update building colors based on BKAFI pairs (use cached data if available)
-            updateBuildingColorsForStage2(true, () => {
-                // After bulk update, specifically update the selected building if properties window is open
-                if (selectedBuildingId) {
-                    updateSelectedBuildingColor();
-                }
-                // Hide loading when color update completes
-                hideLoading();
-            });
-            
-            // Update BKAFI button in properties window if open
-            const bkafiBtn = document.getElementById('run-bkafi-btn');
-            if (bkafiBtn) {
-                bkafiBtn.disabled = true;
-                bkafiBtn.textContent = 'BKAFI Completed';
-                bkafiBtn.style.background = '#28a745';
+
+            if (status === 202 && data.job_id) {
+                showLoading('Loading BKAFI results (queued)...');
+                pollJobStatus(
+                    data.job_id,
+                    () => handleBkafiSuccess('BKAFI results loaded'),
+                    handleBkafiError
+                );
+                return;
             }
-            
-            // If building properties window is open, load BKAFI pairs
-            if (selectedBuildingId) {
-                loadBuildingBkafiPairs(selectedBuildingId);
-            }
+
+            handleBkafiSuccess(data.message || 'BKAFI results loaded');
         })
         .catch(error => {
-            console.error('Error loading BKAFI results:', error);
-            hideLoading();
-            alert('Error loading BKAFI results: ' + error.message);
-            stepBtn.textContent = 'Run BKAFI';
-            stepBtn.disabled = false;
+            handleBkafiError(error.message);
         });
 }
 
@@ -2273,6 +2446,43 @@ function hideLoading() {
     if (overlay) {
         overlay.style.display = 'none';
     }
+}
+
+// Poll job status until completion
+function pollJobStatus(jobId, onSuccess, onError, options = {}) {
+    const intervalMs = options.intervalMs || 2000;
+    const maxAttempts = options.maxAttempts || 180;
+    let attempts = 0;
+
+    const poll = () => {
+        attempts += 1;
+        fetch(`/api/jobs/${jobId}`)
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'SUCCESS') {
+                    onSuccess(data.result);
+                    return;
+                }
+                if (data.status === 'FAILURE') {
+                    onError(data.error || 'Job failed');
+                    return;
+                }
+                if (attempts >= maxAttempts) {
+                    onError('Job timed out');
+                    return;
+                }
+                setTimeout(poll, intervalMs);
+            })
+            .catch(err => {
+                if (attempts >= maxAttempts) {
+                    onError(err.message || 'Job timed out');
+                    return;
+                }
+                setTimeout(poll, intervalMs);
+            });
+    };
+
+    poll();
 }
 
 // Update the selected building's color based on current pipeline state

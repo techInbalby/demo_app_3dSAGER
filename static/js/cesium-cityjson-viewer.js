@@ -241,7 +241,7 @@ class CesiumCityJSONViewer {
         this.showLoading();
         
         // Fetch CityJSON
-        const apiUrl = `/api/data/file/${encodeURIComponent(filePath)}`;
+        const apiUrl = `/api/data/file?path=${encodeURIComponent(filePath)}`;
         const fetchStartTime = performance.now();
         
         this.updateLoadingProgress('Downloading file...');

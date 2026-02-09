@@ -11,6 +11,11 @@ from flask import Flask, render_template, jsonify, request, make_response
 from flask_compress import Compress
 from pathlib import Path
 import hashlib
+import redis
+
+from tasks import celery as celery_app
+from tasks import calculate_features as calculate_features_task
+from tasks import load_bkafi_results as load_bkafi_task
 
 app = Flask(__name__)
 # Enable compression for all responses (gzip)
@@ -26,9 +31,77 @@ LOGS_DIR = BASE_DIR / 'logs'
 # Results JSON files
 DEMO_RESULTS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_detailed_results_XGBClassifier_seed1.json'
 DEMO_METRICS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_metrics_summary_seed1.json'
+FEATURES_PARQUET = DATA_DIR / 'property_dicts' / 'features.parquet'
 
 # Confidence threshold for predictions (hardcoded, but easy to make configurable)
 CONFIDENCE_THRESHOLD = 0.5
+REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+CACHE_TTL_SECONDS = int(os.getenv('CACHE_TTL_SECONDS', '21600'))
+
+_redis_client = None
+
+
+def get_redis_client():
+    global _redis_client
+    if _redis_client is not None:
+        return _redis_client
+    try:
+        client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        client.ping()
+        _redis_client = client
+        return _redis_client
+    except Exception:
+        return None
+
+
+def cache_get_json(key):
+    client = get_redis_client()
+    if not client:
+        return None
+    raw = client.get(key)
+    if not raw:
+        return None
+    return json.loads(raw)
+
+
+def cache_set_json(key, payload, ttl=CACHE_TTL_SECONDS):
+    client = get_redis_client()
+    if not client:
+        return False
+    client.set(key, json.dumps(payload), ex=ttl)
+    return True
+
+
+def build_features_from_parquet(parquet_path: Path):
+    df = pd.read_parquet(parquet_path)
+    building_features = {}
+    for row in df.itertuples(index=False):
+        building_id = str(row.building_id)
+        feature_name = str(row.feature_name)
+        value = row.value
+        building_features.setdefault(building_id, {})[feature_name] = value
+    return building_features
+
+
+def get_features_cache(file_path):
+    cached = cache_get_json(f'features:{file_path}')
+    if cached is not None:
+        return cached
+    return features_cache.get(file_path)
+
+
+def get_bkafi_cache():
+    cached = cache_get_json('bkafi:flat')
+    if cached is not None:
+        return cached
+    return bkafi_cache
+
+
+def get_bkafi_by_file_cache():
+    cached = cache_get_json('bkafi:by_file')
+    if cached is not None:
+        return cached
+    return getattr(app, 'bkafi_cache_by_file', None)
 
 # Ensure directories exist
 for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, LOGS_DIR]:
@@ -216,6 +289,15 @@ def get_file(file_path):
             response = make_response('', 304)  # Not Modified
             response.headers['ETag'] = etag
             return response
+
+        cache_key = f"cityjson:{file_path}:{etag}"
+        cached_payload = cache_get_json(cache_key)
+        if cached_payload is not None:
+            response = jsonify(cached_payload)
+            response.headers['ETag'] = etag
+            response.headers['Cache-Control'] = 'public, max-age=3600'
+            response.headers['Content-Type'] = 'application/json; charset=utf-8'
+            return response
         
         with open(found_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
@@ -226,6 +308,7 @@ def get_file(file_path):
             response.headers['ETag'] = etag
             response.headers['Cache-Control'] = 'public, max-age=3600'  # Cache for 1 hour
             response.headers['Content-Type'] = 'application/json; charset=utf-8'
+            cache_set_json(cache_key, data)
             return response
             
     except json.JSONDecodeError as e:
@@ -240,6 +323,15 @@ def get_file(file_path):
             'error': str(e),
             'traceback': error_trace
         }), 500
+
+
+@app.route('/api/data/file')
+def get_file_by_query():
+    """Get CityJSON file content via query param to avoid encoded slashes."""
+    file_path = request.args.get('path')
+    if not file_path:
+        return jsonify({'error': 'Missing path parameter'}), 400
+    return get_file(file_path)
 
 
 # Global cache for loaded features
@@ -261,6 +353,34 @@ def calculate_all_features():
             return jsonify({'error': 'No file path provided'}), 400
         
         print(f"Calculating features for all buildings in file: {file_path}")
+
+        cache_key = f"features:{file_path}"
+        cached_features = cache_get_json(cache_key)
+        if cached_features is not None:
+            features_cache[file_path] = cached_features
+            return jsonify({
+                'success': True,
+                'message': f'Features already cached for {file_path}',
+                'building_count': len(cached_features)
+            })
+
+        if get_redis_client():
+            job = calculate_features_task.delay(file_path)
+            return jsonify({
+                'job_id': job.id,
+                'status': 'queued',
+                'message': 'Feature calculation queued'
+            }), 202
+
+        if FEATURES_PARQUET.exists():
+            building_features = build_features_from_parquet(FEATURES_PARQUET)
+            features_cache[file_path] = building_features
+            cache_set_json(cache_key, building_features)
+            return jsonify({
+                'success': True,
+                'message': f'Features loaded from parquet for {file_path}',
+                'building_count': len(building_features)
+            })
         
         # Load from joblib file
         joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
@@ -318,8 +438,8 @@ def calculate_all_features():
                         building_features[building_id_str][feature_name] = value
         
         # Store in cache (using the reorganized structure)
-        cache_key = file_path
-        features_cache[cache_key] = building_features
+        features_cache[file_path] = building_features
+        cache_set_json(cache_key, building_features)
         
         # Return success with count
         building_count = len(building_features)
@@ -346,9 +466,8 @@ def get_building_features(building_id):
         print(f"Getting features for building {building_id} from file {file_path}")
         
         # First check cache
-        cache_key = file_path
-        if cache_key in features_cache:
-            building_features = features_cache[cache_key]
+        building_features = get_features_cache(file_path)
+        if building_features:
             # Try exact match first
             if isinstance(building_features, dict) and building_id in building_features:
                 features = building_features[building_id]
@@ -420,10 +539,16 @@ def get_building_features(building_id):
                         print(f"Loaded features from cache for building {building_id} (found {cached_id}): {len(cached_features)} features")
                         return jsonify({'building_id': building_id, 'features': cached_features})
         
-        # Try to load from joblib file if not in cache
-        joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
-        
-        if joblib_path.exists():
+        # Try to load from parquet file if not in cache
+        if FEATURES_PARQUET.exists():
+            building_features = build_features_from_parquet(FEATURES_PARQUET)
+        else:
+            # Fall back to joblib
+            joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
+            
+            if not joblib_path.exists():
+                return jsonify({'error': f'Joblib file not found at {joblib_path}', 'features': {}}), 404
+
             import joblib
             import numpy as np
             with open(joblib_path, 'rb') as f:
@@ -465,80 +590,81 @@ def get_building_features(building_id):
                                 value = value.tolist()
                             building_features[bid_str][feature_name] = value
             
-            # Store in cache
-            features_cache[cache_key] = building_features
-            
-            # Try exact match first
-            if building_id in building_features:
-                features = building_features[building_id]
-                print(f"Loaded features from joblib for building {building_id}: {len(features)} features")
+        # Store in cache
+        features_cache[file_path] = building_features
+        cache_set_json(f'features:{file_path}', building_features)
+        
+        # Try exact match first
+        if building_id in building_features:
+            features = building_features[building_id]
+            print(f"Loaded features from joblib for building {building_id}: {len(features)} features")
+            return jsonify({'building_id': building_id, 'features': features})
+        
+        # Try to match by extracting numeric ID using regex (handle prefixes like "bag_", "NL.IMBAG.Pand.", etc.)
+        # Extract numeric part from building_id using regex (e.g., "bag_0518100000271783" -> "0518100000271783")
+        # Pattern: find a sequence of digits (10 or more digits for building IDs)
+        numeric_match = re.search(r'(\d{10,})', str(building_id))
+        if numeric_match:
+            numeric_id = numeric_match.group(1)
+        else:
+            # Fallback: try splitting by underscore
+            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = str(numeric_id)  # Ensure it's a string
+        
+        print(f"Extracted numeric ID: {numeric_id} from building_id: {building_id}")
+        print(f"Available building IDs in joblib (first 5): {list(building_features.keys())[:5]}")
+        print(f"Total buildings in joblib: {len(building_features)}")
+        
+        # Try exact match
+        if numeric_id in building_features:
+            features = building_features[numeric_id]
+            print(f"Loaded features from joblib for building {building_id} (matched as {numeric_id}): {len(features)} features")
+            return jsonify({'building_id': building_id, 'features': features})
+        
+        # Try to find by string comparison and regex (handle any type mismatches)
+        # Also try with/without leading zeros
+        numeric_id_variants = [
+            numeric_id,  # Original
+            numeric_id.lstrip('0'),  # Without leading zeros
+            numeric_id.zfill(16),  # Padded to 16 digits
+        ]
+        
+        for variant in numeric_id_variants:
+            # Try exact match with variant
+            if variant in building_features:
+                features = building_features[variant]
+                print(f"Loaded features from joblib for building {building_id} (matched variant {variant}): {len(features)} features")
                 return jsonify({'building_id': building_id, 'features': features})
             
-            # Try to match by extracting numeric ID using regex (handle prefixes like "bag_", "NL.IMBAG.Pand.", etc.)
-            # Extract numeric part from building_id using regex (e.g., "bag_0518100000271783" -> "0518100000271783")
-            # Pattern: find a sequence of digits (10 or more digits for building IDs)
-            numeric_match = re.search(r'(\d{10,})', str(building_id))
-            if numeric_match:
-                numeric_id = numeric_match.group(1)
-            else:
-                # Fallback: try splitting by underscore
-                numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
-            numeric_id = str(numeric_id)  # Ensure it's a string
-            
-            print(f"Extracted numeric ID: {numeric_id} from building_id: {building_id}")
-            print(f"Available building IDs in joblib (first 5): {list(building_features.keys())[:5]}")
-            print(f"Total buildings in joblib: {len(building_features)}")
-            
-            # Try exact match
-            if numeric_id in building_features:
-                features = building_features[numeric_id]
-                print(f"Loaded features from joblib for building {building_id} (matched as {numeric_id}): {len(features)} features")
-                return jsonify({'building_id': building_id, 'features': features})
-            
-            # Try to find by string comparison and regex (handle any type mismatches)
-            # Also try with/without leading zeros
-            numeric_id_variants = [
-                numeric_id,  # Original
-                numeric_id.lstrip('0'),  # Without leading zeros
-                numeric_id.zfill(16),  # Padded to 16 digits
-            ]
-            
-            for variant in numeric_id_variants:
-                # Try exact match with variant
-                if variant in building_features:
-                    features = building_features[variant]
-                    print(f"Loaded features from joblib for building {building_id} (matched variant {variant}): {len(features)} features")
-                    return jsonify({'building_id': building_id, 'features': features})
-                
-                # Try to find by string comparison and regex
-                for cached_id, cached_features in building_features.items():
-                    cached_id_str = str(cached_id)
-                    # Try exact match
-                    if cached_id_str == variant:
-                        print(f"Loaded features from joblib for building {building_id} (matched {cached_id} as variant {variant}): {len(cached_features)} features")
-                        return jsonify({'building_id': building_id, 'features': cached_features})
-                    # Try regex match - check if variant is contained in cached_id or vice versa
-                    if re.search(variant, cached_id_str) or re.search(cached_id_str, variant):
-                        print(f"Loaded features from joblib for building {building_id} (regex matched {cached_id} with variant {variant}): {len(cached_features)} features")
-                        return jsonify({'building_id': building_id, 'features': cached_features})
-                    # Try partial match - check if the variant ends with cached_id or vice versa
-                    if variant.endswith(cached_id_str) or cached_id_str.endswith(variant):
-                        print(f"Loaded features from joblib for building {building_id} (partial match {cached_id} with variant {variant}): {len(cached_features)} features")
-                        return jsonify({'building_id': building_id, 'features': cached_features})
-            
-            # Final check: search through all building IDs to see if any contain the numeric_id
-            print(f"Searching through all {len(building_features)} building IDs for {numeric_id}...")
+            # Try to find by string comparison and regex
             for cached_id, cached_features in building_features.items():
                 cached_id_str = str(cached_id)
-                # Check if numeric_id appears anywhere in cached_id
-                if numeric_id in cached_id_str or cached_id_str in numeric_id:
-                    print(f"Found partial match: {cached_id} contains {numeric_id} or vice versa")
-                    print(f"Loaded features from joblib for building {building_id} (found {cached_id}): {len(cached_features)} features")
+                # Try exact match
+                if cached_id_str == variant:
+                    print(f"Loaded features from joblib for building {building_id} (matched {cached_id} as variant {variant}): {len(cached_features)} features")
                     return jsonify({'building_id': building_id, 'features': cached_features})
+                # Try regex match - check if variant is contained in cached_id or vice versa
+                if re.search(variant, cached_id_str) or re.search(cached_id_str, variant):
+                    print(f"Loaded features from joblib for building {building_id} (regex matched {cached_id} with variant {variant}): {len(cached_features)} features")
+                    return jsonify({'building_id': building_id, 'features': cached_features})
+                # Try partial match - check if the variant ends with cached_id or vice versa
+                if variant.endswith(cached_id_str) or cached_id_str.endswith(variant):
+                    print(f"Loaded features from joblib for building {building_id} (partial match {cached_id} with variant {variant}): {len(cached_features)} features")
+                    return jsonify({'building_id': building_id, 'features': cached_features})
+        
+        # Final check: search through all building IDs to see if any contain the numeric_id
+        print(f"Searching through all {len(building_features)} building IDs for {numeric_id}...")
+        for cached_id, cached_features in building_features.items():
+            cached_id_str = str(cached_id)
+            # Check if numeric_id appears anywhere in cached_id
+            if numeric_id in cached_id_str or cached_id_str in numeric_id:
+                print(f"Found partial match: {cached_id} contains {numeric_id} or vice versa")
+                print(f"Loaded features from joblib for building {building_id} (found {cached_id}): {len(cached_features)} features")
+                return jsonify({'building_id': building_id, 'features': cached_features})
         
         # Building not found in joblib - return empty features with a message
         print(f"WARNING: Building {building_id} (numeric: {numeric_id if 'numeric_id' in locals() else building_id}) not found in joblib file")
-        print(f"This building may not have features calculated, or it's not in the dataset used for feature calculation")
+        print("This building may not have features calculated, or it's not in the dataset used for feature calculation")
         # Return empty features instead of mock data
         return jsonify({
             'building_id': building_id,
@@ -561,6 +687,26 @@ def load_bkafi_results():
     """
     try:
         global bkafi_cache
+
+        cached_bkafi = get_bkafi_cache()
+        cached_by_file = get_bkafi_by_file_cache()
+        if cached_bkafi is not None and cached_by_file is not None:
+            bkafi_cache = cached_bkafi
+            app.bkafi_cache_by_file = cached_by_file
+            return jsonify({
+                'success': True,
+                'message': 'BKAFI results already cached',
+                'total_pairs': sum(len(v.get('possible_matches', [])) for v in cached_bkafi.values()),
+                'unique_candidates': len(cached_bkafi)
+            })
+
+        if get_redis_client():
+            job = load_bkafi_task.delay()
+            return jsonify({
+                'job_id': job.id,
+                'status': 'queued',
+                'message': 'BKAFI load queued'
+            }), 202
         
         # Load from JSON file
         if not DEMO_RESULTS_JSON.exists():
@@ -590,6 +736,9 @@ def load_bkafi_results():
         # Also store the original file-based structure for file-specific lookups
         if not hasattr(app, 'bkafi_cache_by_file'):
             app.bkafi_cache_by_file = results_dict
+
+        cache_set_json('bkafi:flat', flattened_cache)
+        cache_set_json('bkafi:by_file', results_dict)
         
         return jsonify({
             'success': True,
@@ -608,6 +757,39 @@ def load_bkafi_results():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/jobs/<task_id>', methods=['GET'])
+def get_job_status(task_id):
+    result = celery_app.AsyncResult(task_id)
+    payload = {
+        'task_id': task_id,
+        'status': result.status
+    }
+    if result.failed():
+        payload['error'] = str(result.result)
+    if result.successful():
+        payload['result'] = result.result
+    return jsonify(payload)
+
+
+@app.route('/api/features/result', methods=['GET'])
+def get_features_result():
+    file_path = request.args.get('file_path', '')
+    if not file_path:
+        return jsonify({'error': 'No file path provided'}), 400
+    cached = cache_get_json(f'features:{file_path}')
+    if cached is None:
+        return jsonify({'error': 'Features not found in cache'}), 404
+    return jsonify({'file_path': file_path, 'features': cached})
+
+
+@app.route('/api/bkafi/result', methods=['GET'])
+def get_bkafi_result():
+    cached = cache_get_json('bkafi:flat')
+    if cached is None:
+        return jsonify({'error': 'BKAFI results not found in cache'}), 404
+    return jsonify({'bkafi': cached})
+
+
 @app.route('/api/building/single/<building_id>')
 def get_single_building(building_id):
     """
@@ -621,6 +803,11 @@ def get_single_building(building_id):
             return jsonify({'error': 'No file path provided'}), 400
         
         print(f"Extracting single building {building_id} from file {file_path}")
+
+        cache_key = f"building:{file_path}:{building_id}"
+        cached_building = cache_get_json(cache_key)
+        if cached_building is not None:
+            return jsonify(cached_building)
         
         # Find the file
         file_name = Path(file_path).name
@@ -755,6 +942,7 @@ def get_single_building(building_id):
             minimal_cityjson['transform'] = city_json['transform']
         
         print(f"Created minimal CityJSON with 1 building and {len(new_vertices)} vertices")
+        cache_set_json(cache_key, minimal_cityjson)
         return jsonify(minimal_cityjson)
         
     except Exception as e:
@@ -884,22 +1072,22 @@ def get_building_bkafi(building_id):
     Query params: file (the selected file path)
     """
     try:
-        global bkafi_cache
         file_path = request.args.get('file', '')
         print(f"Getting BKAFI pairs for building {building_id} from file {file_path}")
         
-        if bkafi_cache is None:
-            # Try to load if not cached
+        bkafi_cache_local = get_bkafi_cache()
+        if bkafi_cache_local is None:
+            # Try to load synchronously if not cached
             if DEMO_RESULTS_JSON.exists():
                 with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
                     results_dict = json.load(f)
-                # Flatten the file-based structure
                 flattened_cache = {}
                 for file_name, file_buildings in results_dict.items():
                     for building_id, building_data in file_buildings.items():
                         flattened_cache[building_id] = building_data
-                bkafi_cache = flattened_cache
-                app.bkafi_cache_by_file = results_dict
+                bkafi_cache_local = flattened_cache
+                cache_set_json('bkafi:flat', flattened_cache)
+                cache_set_json('bkafi:by_file', results_dict)
                 print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
             else:
                 return jsonify({
@@ -919,17 +1107,17 @@ def get_building_bkafi(building_id):
         print(f"Looking for pairs for candidate building: {numeric_id}")
         
         # Lookup candidate building in dictionary (try exact match first)
-        building_data = bkafi_cache.get(numeric_id)
+        building_data = bkafi_cache_local.get(numeric_id)
         
         # If no exact match, try to find by string comparison
         if building_data is None:
-            for candidate_id in bkafi_cache.keys():
+            for candidate_id in bkafi_cache_local.keys():
                 if str(candidate_id) == numeric_id:
-                    building_data = bkafi_cache[candidate_id]
+                    building_data = bkafi_cache_local[candidate_id]
                     break
                 # Also try if numeric_id is contained in candidate_id or vice versa
                 if numeric_id in str(candidate_id) or str(candidate_id) in numeric_id:
-                    building_data = bkafi_cache[candidate_id]
+                    building_data = bkafi_cache_local[candidate_id]
                     break
         
         if building_data is None:
@@ -986,11 +1174,11 @@ def get_building_matches(building_id):
     Query params: file (the selected file path)
     """
     try:
-        global bkafi_cache
         file_path = request.args.get('file', '')
         print(f"Getting matches for building {building_id} from file {file_path}")
         
-        if bkafi_cache is None:
+        bkafi_cache_local = get_bkafi_cache()
+        if bkafi_cache_local is None:
             # Try to load if not cached
             if DEMO_RESULTS_JSON.exists():
                 with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
@@ -1000,8 +1188,9 @@ def get_building_matches(building_id):
                 for file_name, file_buildings in results_dict.items():
                     for building_id, building_data in file_buildings.items():
                         flattened_cache[building_id] = building_data
-                bkafi_cache = flattened_cache
-                app.bkafi_cache_by_file = results_dict
+                bkafi_cache_local = flattened_cache
+                cache_set_json('bkafi:flat', flattened_cache)
+                cache_set_json('bkafi:by_file', results_dict)
                 print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
             else:
                 return jsonify({
@@ -1019,16 +1208,16 @@ def get_building_matches(building_id):
         numeric_id = str(numeric_id)
         
         # Lookup candidate building in dictionary
-        building_data = bkafi_cache.get(numeric_id)
+        building_data = bkafi_cache_local.get(numeric_id)
         
         # If no exact match, try to find by string comparison
         if building_data is None:
-            for candidate_id in bkafi_cache.keys():
+            for candidate_id in bkafi_cache_local.keys():
                 if str(candidate_id) == numeric_id:
-                    building_data = bkafi_cache[candidate_id]
+                    building_data = bkafi_cache_local[candidate_id]
                     break
                 if numeric_id in str(candidate_id) or str(candidate_id) in numeric_id:
-                    building_data = bkafi_cache[candidate_id]
+                    building_data = bkafi_cache_local[candidate_id]
                     break
         
         if building_data is None:
@@ -1092,16 +1281,17 @@ def get_all_buildings_status():
         result = {}
         
         # 1. Check which buildings have features
-        cache_key = file_path
         has_features = set()
-        if cache_key in features_cache:
-            has_features = set(features_cache[cache_key].keys())
+        features_data = get_features_cache(file_path)
+        if isinstance(features_data, dict):
+            has_features = set(features_data.keys())
         
         # 2. Check which buildings have BKAFI pairs
         has_pairs = set()
-        if bkafi_cache is not None:
+        bkafi_data = get_bkafi_cache()
+        if bkafi_data is not None:
             # Get all unique candidate building IDs from dictionary keys
-            for candidate_id in bkafi_cache.keys():
+            for candidate_id in bkafi_data.keys():
                 bid_str = str(candidate_id)
                 has_pairs.add(bid_str)
                 # Also add numeric version for matching
@@ -1112,9 +1302,9 @@ def get_all_buildings_status():
         # 3. Check match status (true match, false positive, no match)
         # For each building, check all its pairs to determine overall status
         match_status = {}  # building_id -> 'true_match', 'false_positive', 'no_match'
-        if bkafi_cache is not None:
+        if bkafi_data is not None:
             # Iterate over dictionary keys (candidate building IDs)
-            for candidate_id, building_data in bkafi_cache.items():
+            for candidate_id, building_data in bkafi_data.items():
                 source_id_str = str(candidate_id)
                 
                 # Get possible_matches array
@@ -1265,23 +1455,17 @@ def get_classifier_summary():
         found_true_matches = threshold_true_positives
         
         # Calculate total pairs from detailed results (need to load BKAFI cache for this)
-        global bkafi_cache
-        if bkafi_cache is None:
-            if DEMO_RESULTS_JSON.exists():
-                with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
-                    results_dict = json.load(f)
-                # Flatten the file-based structure
-                flattened_cache = {}
-                for fname, file_buildings in results_dict.items():
-                    for building_id, building_data in file_buildings.items():
-                        flattened_cache[building_id] = building_data
-                bkafi_cache = flattened_cache
-                app.bkafi_cache_by_file = results_dict
+        bkafi_by_file = get_bkafi_by_file_cache()
+        if bkafi_by_file is None and DEMO_RESULTS_JSON.exists():
+            with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
+                results_dict = json.load(f)
+            bkafi_by_file = results_dict
+            cache_set_json('bkafi:by_file', results_dict)
         
         # Count total pairs for this file
         total_pairs = 0
-        if hasattr(app, 'bkafi_cache_by_file') and app.bkafi_cache_by_file and file_name in app.bkafi_cache_by_file:
-            for building_data in app.bkafi_cache_by_file[file_name].values():
+        if bkafi_by_file and file_name in bkafi_by_file:
+            for building_data in bkafi_by_file[file_name].values():
                 total_pairs += len(building_data.get('possible_matches', []))
         
         # Get total buildings in file

@@ -24,9 +24,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application code (excluding data - we'll handle it separately)
-COPY app.py requirements.txt ./
+COPY app.py tasks.py requirements.txt ./
 COPY templates/ templates/
 COPY static/ static/
+COPY deploy/ deploy/
 
 # Copy data directory into image
 # This avoids file locking issues with cloud storage (OneDrive) mounts
@@ -44,7 +45,7 @@ EXPOSE 5000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import requests; requests.get('http://localhost:5000/')" || exit 1
 
-# Run Flask application
+# Run Flask application (configurable via env vars)
 #CMD ["python", "app.py"]
-CMD ["gunicorn", "-w", "2", "-b", "0.0.0.0:5000", "app:app"]
+CMD ["/bin/sh", "-c", "gunicorn -c deploy/gunicorn.conf.py app:app"]
 

@@ -1,9 +1,9 @@
 services:
   web:
     build: .
-    container_name: demo_app_3dsager
+    container_name: sager_web_app
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       # Data is copied into image during build to avoid OneDrive file locking issues
       # Uncomment the line below ONLY if you need to update data without rebuilding
@@ -17,6 +17,11 @@ services:
       #- FLASK_ENV=development
       - FLASK_APP=app.py
       #- FLASK_DEBUG=1
+      - REDIS_URL=redis://redis:6379/0
+      - CACHE_TTL_SECONDS=21600
+      - GUNICORN_WORKERS=4
+      - GUNICORN_THREADS=2
+      - GUNICORN_TIMEOUT=180
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:5000/')"]
@@ -24,4 +29,25 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  worker:
+    build: .
+    container_name: demo_app_3dsager_worker
+    command: celery -A tasks.celery worker --loglevel=info
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CACHE_TTL_SECONDS=21600
+    volumes:
+      - ./results_demo:/app/results_demo
+      - ./saved_model_files:/app/saved_model_files
+      - ./logs:/app/logs
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: demo_app_3dsager_redis
+    restart: unless-stopped
+
 

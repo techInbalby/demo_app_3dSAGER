@@ -424,8 +424,9 @@ This demo application visualizes results from the **3dSAGER** (3D Spatial Attrib
 
 ### 3dSAGER Project Information
 
-- **Repository**: https://anonymous.4open.science/r/3dSAGER/README.md
-- **Authors**: [Add 3dSAGER authors/contributors here]
+- **Repository**: https://github.com/BarGenossar/3dSAGER
+- **Paper**: https://arxiv.org/pdf/2511.06300
+- **Authors**: Bar Genossar, Sagi Dalyot, Roee Shraga, Avigdor Gal
 - **License**: Apache License 2.0 (see `3dSAGER_LICENSE` file)
 - **Description**: 3dSAGER is a research project for matching and resolving entities between different 3D city model datasets using coordinate-agnostic geometric features and machine learning.
 

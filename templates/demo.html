@@ -35,9 +35,16 @@
                 </div>
                 <h2>3dSAGER Pipeline</h2>
             </div>
+
+            <div class="mobile-actions">
+                <button class="mobile-action-btn" data-target="viewer-section" data-title="3D Viewer">3D Viewer</button>
+                <button class="mobile-action-btn" data-target="file-selection-section" data-title="Select Layer">Select Layer</button>
+                <button class="mobile-action-btn" data-target="location-section" data-title="Location">Show Location</button>
+                <button class="mobile-action-btn" data-target="pipeline-section" data-title="3dSAGER Pipeline">Pipeline Steps</button>
+            </div>
             
             <!-- File Selection -->
-            <div class="file-selection">
+            <div class="file-selection" id="file-selection-section">
                 <h3>Select Data Source</h3>
                 <div class="source-tabs">
                     <button class="tab-btn active" onclick="showSource('A')">Candidates</button>
@@ -58,13 +65,13 @@
             </div>
             
             <!-- Location Map -->
-            <div class="location-map">
+            <div class="location-map" id="location-section">
                 <h3>Location</h3>
                 <div id="location-map" style="height: 200px; width: 100%; border-radius: 8px; margin-top: 10px;"></div>
             </div>
             
             <!-- Pipeline Steps -->
-            <div class="pipeline-steps">
+            <div class="pipeline-steps" id="pipeline-section">
                 <h3>3dSAGER Pipeline</h3>
                 <div class="step" id="step-1">
                     <div class="step-number">1</div>
@@ -99,20 +106,25 @@
             </div>
             
             <!-- 3dSAGER Repository Link -->
-            <div class="repository-link">
+            <div class="repository-link" id="repository-section">
                 <h3>About 3dSAGER</h3>
                 <p>
                     This demo visualizes results from the 3dSAGER pipeline. For the full pipeline implementation, visit:
                 </p>
-                <a href="https://anonymous.4open.science/r/3dSAGER/README.md" target="_blank" rel="noopener noreferrer">
+                <a href="https://github.com/BarGenossar/3dSAGER" target="_blank" rel="noopener noreferrer">
                     3dSAGER Repository
                 </a>
+                <p style="margin-top: 0.75rem;">
+                    <a href="https://arxiv.org/pdf/2511.06300" target="_blank" rel="noopener noreferrer">
+                        3dSAGER Technical Report
+                    </a>
+                </p>
             </div>
         </div>
         
         <!-- Main Content -->
         <div class="main-content">
-            <div class="viewer-container">
+            <div class="viewer-container" id="viewer-section">
                 <div class="viewer-header">
                     <h3>3D City Model Viewer</h3>
                     <div class="viewer-controls">
@@ -129,6 +141,16 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Mobile Panel -->
+    <div id="mobile-panel-overlay" class="mobile-panel-overlay" style="display: none;"></div>
+    <div id="mobile-panel" class="mobile-panel" style="display: none;">
+        <div class="mobile-panel-header">
+            <h3 id="mobile-panel-title">Panel</h3>
+            <button class="close-btn" onclick="closeMobilePanel()">×</button>
+        </div>
+        <div class="mobile-panel-body" id="mobile-panel-body"></div>
     </div>
 
     <!-- Building Properties Window -->
