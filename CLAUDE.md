@@ -28,7 +28,7 @@ bash scripts/setup_demo_inputs.sh        # --dry-run for preview
 python scripts/prebake_cityjson.py       # generate .prebaked.json siblings
 ```
 
-Docker (mirrors production layout — `web` on host port 5001, plus `worker` and `redis`):
+Docker (mirrors production layout — `web` on host port 5000, plus `worker` and `redis`):
 
 ```bash
 docker-compose up --build
@@ -82,7 +82,7 @@ Step 4 (Alignment) → align + save + prebake       (≈seconds + 4 sub-stages)
 - `scripts/setup_demo_inputs.sh` — one-shot, idempotent input re-stager.
 - `scripts/prebake_cityjson.py` — build-time CRS transform; honors `DATA_DIR` and `EXTRA_PREBAKE_DIRS`.
 - `deploy/gunicorn.conf.py` — Gunicorn config (4 workers × 2 threads, 180 s timeout).
-- `docker-compose.yml` — defines `web` (host 5001 → container 5000), `worker`, `redis`.
+- `docker-compose.yml` — defines `web` (host 5000 → container 5000), `worker`, `redis`.
 
 ## Environment variables
 

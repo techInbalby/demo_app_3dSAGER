@@ -16,18 +16,30 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements file
+# Copy requirements files (app + standalone inference pipeline)
 COPY requirements.txt .
+COPY demo_infrance_pipeline/requirements.txt /tmp/pipeline-requirements.txt
 
-# Install Python dependencies
+# Install Python dependencies. The pipeline bundle's requirements install LAST
+# so its newer numpy/pandas/sklearn/xgboost win over the app's older pins —
+# the new pipeline_stages code is built against them. We strip torch /
+# torchvision / clip from the pipeline requirements: they're only needed for the
+# ViT-based blocking variant which the demo does not use, and add ~2 GB.
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt && \
+    sed -i '/^torch/d; /^torchvision/d; /^clip[[:space:]]*$/d' /tmp/pipeline-requirements.txt && \
+    pip install --no-cache-dir -r /tmp/pipeline-requirements.txt
 
 # Copy application code (excluding data - we'll handle it separately)
 COPY app.py tasks.py requirements.txt ./
 COPY templates/ templates/
 COPY static/ static/
 COPY deploy/ deploy/
+
+# New live-pipeline packages and the standalone inference bundle.
+COPY pipeline/                pipeline/
+COPY alignment/               alignment/
+COPY demo_infrance_pipeline/  demo_infrance_pipeline/
 
 # Copy scripts
 COPY scripts/ scripts/
@@ -43,7 +55,7 @@ COPY data/ /app/data/
 RUN DATA_DIR=/app/data python scripts/prebake_cityjson.py
 
 # Create necessary directories
-RUN mkdir -p logs results saved_model_files && \
+RUN mkdir -p logs results saved_model_files results_demo/cache && \
     touch logs/.gitkeep
 
 # Expose Flask port
