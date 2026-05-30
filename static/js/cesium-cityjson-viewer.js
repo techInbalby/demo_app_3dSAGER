@@ -8,7 +8,12 @@ const BUILDING_COLOR_MAP = {
     'yellow': Cesium.Color.fromBytes(255, 235, 59, 255),     // Yellow - has BKAFI pairs
     'green': Cesium.Color.fromBytes(76, 175, 80, 255),       // Green - true match
     'red': Cesium.Color.fromBytes(244, 67, 54, 255),         // Red - false positive
-    'darkgray': Cesium.Color.fromBytes(97, 97, 97, 255)      // Dark gray - no match
+    'darkgray': Cesium.Color.fromBytes(97, 97, 97, 255),     // Dark gray - no match
+    // Step 4 sub-stage colors:
+    'cand_misaligned': Cesium.Color.fromBytes(220, 110,  60, 255),   // 4a — misaligned cand
+    'anchor_cand':     Cesium.Color.fromBytes(170,  90, 230, 255),   // 4b — anchor (cand side)
+    'anchor_index':    Cesium.Color.fromBytes(  0, 200, 230, 255),   // 4b — anchor (index side)
+    'false_negative':  Cesium.Color.fromBytes(120,  80, 140, 255)    // 4d — false negative
 };
 
 // Non-selected layer: semi-transparent fill + strong contour so overlapping buildings are distinguishable

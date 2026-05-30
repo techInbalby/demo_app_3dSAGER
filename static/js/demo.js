@@ -15,7 +15,8 @@ let _colorUpdateTicket = null; // Concurrency guard for color update calls
 let pipelineState = {
     step1Completed: false, // Geometric Featurization
     step2Completed: false, // BKAFI Blocking
-    step3Completed: false  // Entity Resolution
+    step3Completed: false, // Matching Classifier (pre-alignment, geometric score)
+    step4Completed: false  // Spatial Alignment (post-alignment, final score)
 };
 
 let layerState = {};
@@ -1853,7 +1854,8 @@ function resetPipelineState() {
     pipelineState = {
         step1Completed: false,
         step2Completed: false,
-        step3Completed: false
+        step3Completed: false,
+        step4Completed: false
     };
     selectedBuildingId = null;
     selectedBuildingData = null;
@@ -1863,6 +1865,9 @@ function resetPipelineState() {
     _cachedOptimizedStatusMap = null;
     buildingFeaturesCache = {};
     buildingBkafiCache = {};
+    if (window.AlignmentStep && typeof window.AlignmentStep.reset === 'function') {
+        window.AlignmentStep.reset();
+    }
     
     // Reset sidebar buttons to initial state
     const stepBtn1 = document.getElementById('step-btn-1');
@@ -3633,6 +3638,10 @@ function viewResults() {
                 advanceTutorialForPipelineAction('viewResults');
                 const summaryBtn = document.getElementById('step-btn-3-summary');
                 if (summaryBtn) summaryBtn.style.display = 'block';
+
+                // Enable Step 4 (Spatial Alignment) now that the classifier has run.
+                const step4Btn = document.getElementById('step-btn-4');
+                if (step4Btn) step4Btn.disabled = false;
 
                 updateBuildingColorsForStage3(true, () => {
                     hideLoading();
