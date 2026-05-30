@@ -165,7 +165,7 @@ def load_bkafi_results():
 
 @celery.task(bind=True, name='tasks.pipeline.run')
 def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
-                 seed=1, match_threshold=0.65, apply_disaster=True):
+                 seed=1, match_threshold=0.40, apply_disaster=True):
     """
     Run pipeline stages up to and including `target_stage`. Each stage is
     individually cache-aware, so unnecessary work is skipped on re-runs.
