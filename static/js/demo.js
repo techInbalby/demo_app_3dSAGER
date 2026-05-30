@@ -1860,12 +1860,14 @@ function selectFile(filePath, source) {
 
 // Reset pipeline state
 function resetPipelineState() {
-    pipelineState = {
-        step1Completed: false,
-        step2Completed: false,
-        step3Completed: false,
-        step4Completed: false
-    };
+    // Mutate in place — don't reassign. window.pipelineState holds the same
+    // object reference and alignment.js / cesium viewer modules read from it;
+    // reassigning to a fresh literal would orphan their reference at the
+    // previous (now-stale) object.
+    pipelineState.step1Completed = false;
+    pipelineState.step2Completed = false;
+    pipelineState.step3Completed = false;
+    pipelineState.step4Completed = false;
     selectedBuildingId = null;
     selectedBuildingData = null;
     featuresLoaded = false;
