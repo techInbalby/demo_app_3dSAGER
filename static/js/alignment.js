@@ -105,8 +105,45 @@
       `transform that RANSAC will recover has not been applied yet.`
     );
   }
+  function _findIndexLayer() {
+    // Returns the file_path of the currently-loaded Source B (index) layer, if any.
+    if (!window.layerState) return null;
+    const entries = Object.entries(window.layerState)
+      .filter(([, s]) => s && s.visible && s.source === 'B');
+    return entries.length ? entries[0][0] : null;
+  }
+
   async function _show4b() {
-    _setInfoCard('Sub-stage 4b (Anchors) — implementation pending.');
+    // 4a must be loaded so the misaligned cand layer exists.
+    await _loadLayerOnce(MISALIGNED_LAYER, MISALIGNED_URL, 'A');
+    const viewer = await _waitForViewer();
+    const colors = await _fetchColors('4b');
+
+    if (typeof viewer.updateBuildingColors === 'function') {
+      await viewer.updateBuildingColors(colors.cand_colors || {}, MISALIGNED_LAYER);
+      const indexLayer = _findIndexLayer();
+      if (indexLayer && Object.keys(colors.index_colors || {}).length) {
+        await viewer.updateBuildingColors(colors.index_colors, indexLayer);
+      }
+    }
+
+    // Anchor count + threshold for the info card.
+    let anchorMeta = '';
+    try {
+      const res = await fetch('/api/alignment/anchors?limit=1');
+      if (res.ok) {
+        const j = await res.json();
+        anchorMeta =
+          `<br>Anchor pool: <strong>${j.total}</strong> pairs ` +
+          `with geometric score ≥ <strong>${j.confidence_threshold}</strong>.`;
+      }
+    } catch (_) {}
+
+    _setInfoCard(
+      `<strong>4b · Anchor selection</strong><br>` +
+      `High-confidence classifier pairs become the anchor pool fed into RANSAC ` +
+      `for rigid-transform estimation.${anchorMeta}`
+    );
   }
   async function _show4c() {
     _setInfoCard('Sub-stage 4c (Transform applied) — implementation pending.');
