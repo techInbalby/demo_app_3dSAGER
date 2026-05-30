@@ -93,10 +93,16 @@
   // Sub-stage renderers
   async function _show4a() {
     const viewer = await _loadLayerOnce(MISALIGNED_LAYER, MISALIGNED_URL, 'A');
+    // If we came from 4c the aligned layer is visible; hide it.
+    if (_ownedLayers.has(ALIGNED_LAYER)) _setLayerVisible(ALIGNED_LAYER, false);
+    _setLayerVisible(MISALIGNED_LAYER, true);
+
     const { cand_colors } = await _fetchColors('4a');
     if (typeof viewer.updateBuildingColors === 'function') {
-      // The viewer's idMapping resolves bag_<id> ↔ <id>, so raw IDs work.
       await viewer.updateBuildingColors(cand_colors || {}, MISALIGNED_LAYER);
+      // Reset any anchor_index highlight on the index layer.
+      const indexLayer = _findIndexLayer();
+      if (indexLayer) await viewer.updateBuildingColors({}, indexLayer);
     }
     if (typeof viewer.fitCameraToBuildings === 'function') viewer.fitCameraToBuildings();
     _setInfoCard(
@@ -116,6 +122,8 @@
   async function _show4b() {
     // 4a must be loaded so the misaligned cand layer exists.
     await _loadLayerOnce(MISALIGNED_LAYER, MISALIGNED_URL, 'A');
+    if (_ownedLayers.has(ALIGNED_LAYER)) _setLayerVisible(ALIGNED_LAYER, false);
+    _setLayerVisible(MISALIGNED_LAYER, true);
     const viewer = await _waitForViewer();
     const colors = await _fetchColors('4b');
 
@@ -145,8 +153,53 @@
       `for rigid-transform estimation.${anchorMeta}`
     );
   }
+  async function _fetchAlignmentInfo() {
+    if (cachedAlignmentInfo) return cachedAlignmentInfo;
+    const res = await fetch('/api/alignment/status');
+    if (!res.ok) throw new Error('alignment status not available');
+    const j = await res.json();
+    cachedAlignmentInfo = j.alignment_info || null;
+    return cachedAlignmentInfo;
+  }
+
+  function _setLayerVisible(layerKey, visible) {
+    if (!window.viewer || typeof window.viewer.setLayerEntityShow !== 'function') return;
+    window.viewer.setLayerEntityShow(layerKey, visible);
+  }
+
   async function _show4c() {
-    _setInfoCard('Sub-stage 4c (Transform applied) — implementation pending.');
+    // Hide misaligned layer; load (or show) the aligned layer in its place.
+    _setLayerVisible(MISALIGNED_LAYER, false);
+    const viewer = await _waitForViewer();
+    if (viewer && 'skipAutoFit' in viewer) viewer.skipAutoFit = true;
+    await _loadLayerOnce(ALIGNED_LAYER, ALIGNED_URL, 'A');
+    _setLayerVisible(ALIGNED_LAYER, true);
+
+    // Reset index colors (clear the anchor_index highlight from 4b).
+    const indexLayer = _findIndexLayer();
+    if (indexLayer && viewer && typeof viewer.updateBuildingColors === 'function') {
+      // Empty mapping reverts to per-source default colors.
+      await viewer.updateBuildingColors({}, indexLayer);
+    }
+
+    // Color all aligned cands with the default A blue.
+    const colors = await _fetchColors('4c');
+    if (viewer && typeof viewer.updateBuildingColors === 'function') {
+      await viewer.updateBuildingColors(colors.cand_colors || {}, ALIGNED_LAYER);
+    }
+
+    let info;
+    try { info = await _fetchAlignmentInfo(); } catch (_) { info = null; }
+    const residual  = info && info.mean_residual_m != null ? `${info.mean_residual_m.toFixed(2)} m` : 'n/a';
+    const anchorN   = info && info.n_anchor_pairs   != null ? info.n_anchor_pairs : 'n/a';
+    const alpha     = info && info.alpha            != null ? info.alpha : 'n/a';
+    _setInfoCard(
+      `<strong>4c · Rigid transform applied</strong><br>` +
+      `Candidates have been moved by the RANSAC-recovered (R, t).<br>` +
+      `Mean residual: <strong>${residual}</strong> · ` +
+      `anchor pairs used: <strong>${anchorN}</strong> · ` +
+      `α (geometric weight): <strong>${alpha}</strong>`
+    );
   }
   async function _show4d() {
     _setInfoCard('Sub-stage 4d (Final matches) — implementation pending.');
