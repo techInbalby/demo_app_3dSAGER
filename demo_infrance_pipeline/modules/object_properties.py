@@ -8,7 +8,15 @@ from collections import defaultdict
 from utils import *
 import math
 from scipy.spatial import ConvexHull
-from multiprocessing import Pool, cpu_count
+from multiprocessing import cpu_count
+# Celery worker processes run as daemons, which forbid `multiprocessing.Pool`
+# children ("daemonic processes are not allowed to have children"). billiard
+# is Celery's fork-friendly drop-in; prefer it when available, fall back to
+# stdlib for non-Celery callers (the CLI).
+try:
+    from billiard.pool import Pool
+except ImportError:
+    from multiprocessing import Pool
 from time import time
 
 
@@ -44,7 +52,10 @@ class ObjectPropertiesProcessor:
             (prop, self.object_dict, self.prop_names_dict[prop], self.vector_normalization)
             for prop in properties
         ]
-        with Pool(processes=self.cores_to_use - 2) as pool:
+        # Reserve up to 2 cores for the OS / parent process, but never go
+        # below 1 — small containers (cpu_count <= 2) would otherwise raise
+        # "Number of processes must be at least 1".
+        with Pool(processes=max(1, self.cores_to_use - 2)) as pool:
             aggregated_prop_dicts = pool.starmap(ObjectPropertiesProcessor.process_prop, args)
 
         for res in aggregated_prop_dicts:
