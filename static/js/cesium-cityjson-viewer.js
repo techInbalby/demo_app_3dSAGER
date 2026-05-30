@@ -380,9 +380,11 @@ class CesiumCityJSONViewer {
             console.error('Viewer not initialized');
             return;
         }
-        
+
         console.log('Loading CityJSON file:', filePath);
-        const { append = false, source = null } = options;
+        // `url`  — override the API endpoint (used by Step 4 to fetch from
+        //          /api/alignment/cityjson?stage=…). Defaults to /api/data/file.
+        const { append = false, source = null, url = null } = options;
 
         if (this.isLoading) {
             this.pendingLoads.push({ filePath, options });
@@ -393,17 +395,17 @@ class CesiumCityJSONViewer {
         this.isLoading = true;
         this.currentLayerFilePath = filePath;
         this.currentLayerSource = source;
-        
+
         // Clear existing buildings
         if (!append) {
             this.clearBuildings();
         }
-        
+
         // Show loading
         this.showLoading();
-        
+
         // Fetch CityJSON
-        const apiUrl = `/api/data/file?path=${encodeURIComponent(filePath)}`;
+        const apiUrl = url || `/api/data/file?path=${encodeURIComponent(filePath)}`;
         const fetchStartTime = performance.now();
         
         this.updateLoadingProgress('Downloading file...');

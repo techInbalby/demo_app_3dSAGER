@@ -21,10 +21,18 @@
 
   const SUBSTAGES = ['4a', '4b', '4c', '4d'];
   const AUTO_ADVANCE_MS = 4500;
+  const MISALIGNED_LAYER = '__alignment_misaligned__';   // virtual layer key for 4a
+  const ALIGNED_LAYER    = '__alignment_aligned__';      // virtual layer key for 4c
+  const MISALIGNED_URL = '/api/alignment/cityjson?stage=misaligned';
+  const ALIGNED_URL    = '/api/alignment/cityjson?stage=aligned';
 
   let activeSubStage = null;
   let autoAdvanceTimer = null;
   let infoCardEl = null;
+  let cachedAlignmentInfo = null;   // populated by run() from /api/alignment/status
+
+  // Layers we own (we'll tear these down on reset()).
+  const _ownedLayers = new Set();
 
   function _btn() { return document.getElementById('step-btn-4'); }
   function _wrap() { return document.getElementById('step-4-substages'); }
@@ -43,9 +51,59 @@
     if (el) el.innerHTML = html;
   }
 
-  // Sub-stage renderers (stubbed; filled in by 9..12)
+  function _waitForViewer() {
+    return new Promise((resolve, reject) => {
+      const start = Date.now();
+      (function tick() {
+        if (window.viewer && window.viewer.isInitialized) return resolve(window.viewer);
+        if (Date.now() - start > 5000) return reject(new Error('Cesium viewer never initialised'));
+        setTimeout(tick, 50);
+      })();
+    });
+  }
+
+  async function _loadLayerOnce(layerKey, url, source) {
+    const viewer = await _waitForViewer();
+    if (_ownedLayers.has(layerKey)) return viewer;   // already loaded
+    return new Promise((resolve, reject) => {
+      viewer.loadCityJSON(layerKey, { append: true, source, url });
+      _ownedLayers.add(layerKey);
+      const start = Date.now();
+      // The viewer doesn't expose a load-complete event yet, so poll isLoading.
+      (function tick() {
+        if (!viewer.isLoading) return resolve(viewer);
+        if (Date.now() - start > 60000) {
+          _ownedLayers.delete(layerKey);
+          return reject(new Error('CityJSON load timed out'));
+        }
+        setTimeout(tick, 80);
+      })();
+    });
+  }
+
+  async function _fetchColors(stage) {
+    const res = await fetch(`/api/alignment/buildings/colors?stage=${encodeURIComponent(stage)}`);
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => ({}))).error || res.statusText;
+      throw new Error(`buildings/colors failed: ${detail}`);
+    }
+    return res.json();
+  }
+
+  // Sub-stage renderers
   async function _show4a() {
-    _setInfoCard('Sub-stage 4a (Misaligned) — implementation pending.');
+    const viewer = await _loadLayerOnce(MISALIGNED_LAYER, MISALIGNED_URL, 'A');
+    const { cand_colors } = await _fetchColors('4a');
+    if (typeof viewer.updateBuildingColors === 'function') {
+      // The viewer's idMapping resolves bag_<id> ↔ <id>, so raw IDs work.
+      await viewer.updateBuildingColors(cand_colors || {}, MISALIGNED_LAYER);
+    }
+    if (typeof viewer.fitCameraToBuildings === 'function') viewer.fitCameraToBuildings();
+    _setInfoCard(
+      `<strong>4a · Misaligned candidates</strong><br>` +
+      `Candidate buildings drawn at their post-disaster positions; the rigid ` +
+      `transform that RANSAC will recover has not been applied yet.`
+    );
   }
   async function _show4b() {
     _setInfoCard('Sub-stage 4b (Anchors) — implementation pending.');
@@ -106,6 +164,12 @@
     if (wrap) wrap.style.display = 'none';
     _markSubStageButton(null);
     _setInfoCard('');
+    // Remove the alignment-owned virtual layers from the viewer.
+    if (window.viewer && typeof window.viewer.removeLayer === 'function') {
+      _ownedLayers.forEach(k => window.viewer.removeLayer(k));
+    }
+    _ownedLayers.clear();
+    cachedAlignmentInfo = null;
     const btn = _btn();
     if (btn) {
       btn.textContent = 'Run Alignment';
