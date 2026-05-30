@@ -2981,3 +2981,28 @@ body.mobile-panel-open {
         border-top: 3px solid var(--primary);
     }
 }
+/* ── 4-step overview list used by the simplified tutorial ─────────────────── */
+.tutorial-step-list {
+    list-style: none;
+    padding: 0;
+    margin: 14px 0;
+}
+.tutorial-step-list li {
+    margin: 0 0 10px;
+    padding: 10px 12px;
+    border-left: 3px solid var(--primary, #4a8bff);
+    background: #f5f8ff;
+    border-radius: 4px;
+}
+.tutorial-step-list li strong {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--primary, #4a8bff);
+    font-size: 14px;
+}
+.tutorial-step-list li span {
+    display: block;
+    color: #555;
+    font-size: 13px;
+    line-height: 1.45;
+}
