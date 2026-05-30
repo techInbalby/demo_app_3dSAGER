@@ -57,7 +57,7 @@
 
                 <div class="card feature-card feature-card-no-img">
                     <h3>Works Without GPS or Shared Coordinates</h3>
-                    <p>When datasets originate from different sources, they often use incompatible coordinate systems. Traditional matching methods fail in these cases because they compare coordinates directly. The pipeline matches buildings purely by their 3D shape, so coordinate misalignment is not an obstacle.</p>
+                    <p>When datasets originate from different sources, they often use incompatible coordinate systems. The pipeline starts by matching buildings purely by their 3D shape, so coordinate misalignment is not an obstacle. The high-confidence shape matches then serve as anchors to recover the rigid transform between the two coordinate frames, after which a spatial nearest-neighbour pass catches additional matches that geometric similarity alone missed.</p>
                 </div>
 
                 <div class="card feature-card">
@@ -110,6 +110,13 @@
                         <div class="pipeline-stage-text">
                             <h4>Match Classification</h4>
                             <p>A machine-learning classifier scores each candidate pair and outputs a confidence value. Pairs above the decision threshold are labelled as matches. The demo displays the results as a colour-coded map of the city, showing confirmed matches, false positives, and buildings with no match found.</p>
+                        </div>
+                    </div>
+                    <div class="pipeline-stage">
+                        <div class="pipeline-stage-number">4</div>
+                        <div class="pipeline-stage-text">
+                            <h4>Spatial Alignment</h4>
+                            <p>From the high-confidence matches in step 3, the system recovers the rigid transform between the two datasets' coordinate frames via RANSAC. With the alignment in hand, every candidate is rematched to its nearest neighbour in the index in post-alignment coordinates. This spatial pass recovers matches that geometric similarity alone missed, lifting end-to-end recall well above what the blocking step can deliver on its own.</p>
                         </div>
                     </div>
                 </div>
