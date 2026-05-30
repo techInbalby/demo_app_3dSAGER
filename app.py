@@ -17,14 +17,18 @@ from tasks import celery as celery_app
 from tasks import calculate_features as calculate_features_task
 from tasks import load_bkafi_results as load_bkafi_task
 
+from pipeline import pipeline_bp
+
 app = Flask(__name__)
 # Enable compression for all responses (gzip)
 Compress(app)
+app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
 
 # Configuration
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
 RESULTS_DIR = BASE_DIR / 'results_demo'
+PIPELINE_CACHE_ROOT = RESULTS_DIR / 'cache'
 SAVED_MODEL_DIR = BASE_DIR / 'saved_model_files'
 LOGS_DIR = BASE_DIR / 'logs'
 

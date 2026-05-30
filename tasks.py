@@ -1,6 +1,8 @@
 import os
 import json
 import re
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,16 @@ import redis
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / 'data'
 RESULTS_DIR = BASE_DIR / 'results_demo'
+PIPELINE_CACHE_ROOT = RESULTS_DIR / 'cache'
+
+# Make the bundled inference pipeline importable.
+_PIPELINE_DIR = BASE_DIR / 'demo_infrance_pipeline'
+if str(_PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(_PIPELINE_DIR))
+# Make scripts/ importable so we can call prebake_file() directly on stage_align outputs.
+_SCRIPTS_DIR = BASE_DIR / 'scripts'
+if str(_SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPTS_DIR))
 
 DEMO_RESULTS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_detailed_results_XGBClassifier_seed1.json'
 JOBLIB_PATH = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
@@ -145,3 +157,69 @@ def load_bkafi_results():
         'total_pairs': int(total_pairs),
         'unique_candidates': int(unique_candidates)
     }
+
+
+# ---------------------------------------------------------------------------- #
+# Online inference pipeline — Step 1–4 driver                                  #
+# ---------------------------------------------------------------------------- #
+
+@celery.task(bind=True, name='tasks.pipeline.run')
+def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
+                 seed=1, match_threshold=0.65, apply_disaster=True):
+    """
+    Run pipeline stages up to and including `target_stage`. Each stage is
+    individually cache-aware, so unnecessary work is skipped on re-runs.
+
+    After stage_align the two generated CityJSON files (post_disaster_cands
+    and aligned_candidates_seed{N}) are pre-baked in place so the viewer can
+    fetch the WGS84 variant directly.
+    """
+    # Import lazily so the celery module can be imported in environments that
+    # don't have the full pipeline dependency tree (e.g. CI for the web layer
+    # alone). When this task actually runs in the worker, all deps are present.
+    import pipeline_stages
+    import prebake_cityjson
+
+    cache_dir = PIPELINE_CACHE_ROOT / input_hash
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    started_at = time.time()
+
+    def progress_cb(stage, message):
+        self.update_state(
+            state='PROGRESS',
+            meta={
+                'stage': stage,
+                'message': message,
+                'elapsed_s': round(time.time() - started_at, 1),
+            },
+        )
+
+    summary = pipeline_stages.run_through(
+        target_stage, cache_dir,
+        cands_path=cands_path,
+        index_path=index_path,
+        seed=seed,
+        match_threshold=match_threshold,
+        apply_disaster=apply_disaster,
+        progress_cb=progress_cb,
+    )
+
+    # Pre-bake the alignment-stage CityJSON outputs so the viewer's WGS84
+    # fast-path is ready when the frontend asks for them.
+    if target_stage == 'align':
+        progress_cb('align', 'pre-baking aligned CityJSON outputs')
+        for stub in [
+            'post_disaster_cands.json',
+            f'aligned_candidates_seed{seed}.json',
+        ]:
+            p = cache_dir / stub
+            if p.exists():
+                try:
+                    prebake_cityjson.prebake_file(p)
+                except Exception as e:
+                    # Don't fail the whole run if prebake fails — viewer can fall back to raw.
+                    print(f"[pipeline_run] prebake of {p.name} failed: {e}")
+
+    summary['input_hash'] = input_hash
+    summary['elapsed_s'] = round(time.time() - started_at, 1)
+    return summary
