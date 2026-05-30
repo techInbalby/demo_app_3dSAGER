@@ -55,5 +55,12 @@ config.Alignment.alpha             = 0.3   # 0 = spatial only, 1 = geometric onl
                                             # the demo data: spatial dominates ranking, classifier
                                             # provides a small bias toward shape-consistent pairs.
 
+# DisasterSimulator translation override. The upstream default of ±100 km would
+# put post-disaster cands outside the WGS84-projection's valid extent for the
+# demo viewer (which expects EPSG:7415 inputs that prebake into WGS84). 500 m
+# keeps the misalignment visually obvious while staying in-bounds.
+DEMO_CRS_TRANSLATION_MAX = 500.0
+config.DisasterSimulation.crs_translation_max = DEMO_CRS_TRANSLATION_MAX
+
 for d in (CACHE_DIR, RESULTS_DIR, INTERMEDIATE_DIR):
     os.makedirs(d, exist_ok=True)

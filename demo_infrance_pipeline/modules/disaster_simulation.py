@@ -111,9 +111,14 @@ class DisasterSimulator:
             [   0.0,    0.0, 1.0]
         ])
 
-        # Large random translation — no absolute reference
-        tx = self._rng.uniform(-100_000.0, 100_000.0)
-        ty = self._rng.uniform(-100_000.0, 100_000.0)
+        # Large random translation — no absolute reference. Magnitude is
+        # configurable so the demo can use a small offset (~hundreds of m)
+        # that stays inside the projection's valid extent for the WGS84
+        # transform in the viewer. Falls back to the original ±100 km when
+        # `crs_translation_max` is not set on the config.
+        translation_max = float(getattr(cfg.DisasterSimulation, 'crs_translation_max', 100_000.0))
+        tx = self._rng.uniform(-translation_max, translation_max)
+        ty = self._rng.uniform(-translation_max, translation_max)
         self.t_crs = np.array([tx, ty, 0.0])
 
         for bid, building in object_dict['cands'].items():

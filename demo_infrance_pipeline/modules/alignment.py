@@ -430,78 +430,94 @@ class RigidAligner:
     def _write_cityjson(self, cands: dict, suffix: str) -> None:
         """
         Write aligned candidates to a CityJSON 1.1 file in the index CRS.
-
-        Vertices are stored as floating-point world coordinates (no re-quantization).
-        Each building is written as a Solid LOD2 geometry preserving the original
-        surface structure.
+        Delegates serialization to the module-level `write_cands_cityjson` so
+        that callers (e.g. the demo's stage_align) can serialize a pre-alignment
+        snapshot using the same code path.
         """
         results_dir = cfg.FilePaths.results_path
         os.makedirs(results_dir, exist_ok=True)
         out_path = os.path.join(results_dir, f"aligned_candidates_{suffix}.json")
-
-        city_objects = {}
-        all_vertices = []
-        vertex_index = {}   # (x, y, z) rounded → global index
-
-        epsg_code = self.output_crs.split(":")[-1]
-
-        for bid, building in cands.items():
-            verts = building['vertices']   # (N, 3) already aligned
-
-            # Build local vertex index
-            local_idx = {}
-            for v in verts:
-                key = (round(float(v[0]), 6), round(float(v[1]), 6), round(float(v[2]), 6))
-                if key not in vertex_index:
-                    vertex_index[key] = len(all_vertices)
-                    all_vertices.append(list(key))
-                local_idx[key] = vertex_index[key]
-
-            # Encode polygon_mesh as surface boundary index lists
-            boundaries = []
-            for surface in building['polygon_mesh']:
-                ring = []
-                for coord in surface:
-                    key = (round(float(coord[0]), 6), round(float(coord[1]), 6), round(float(coord[2]), 6))
-                    # Find the nearest stored key (handles float drift)
-                    if key not in vertex_index:
-                        key = min(
-                            local_idx.keys(),
-                            key=lambda k: (k[0]-key[0])**2 + (k[1]-key[1])**2 + (k[2]-key[2])**2
-                        )
-                    ring.append(vertex_index[key])
-                boundaries.append([ring])
-
-            city_objects[f"bag_{bid}"] = {
-                "type": "Building",
-                "geometry": [{
-                    "type": "Solid",
-                    "lod": "2",
-                    "boundaries": [boundaries]
-                }],
-                "attributes": building.get("attributes", {})
-            }
-
-        cityjson = {
-            "type": "CityJSON",
-            "version": "1.1",
-            "metadata": {
-                "referenceSystem": f"https://www.opengis.net/def/crs/EPSG/0/{epsg_code}"
-            },
-            "CityObjects": city_objects,
-            "vertices": all_vertices,
-            "alignment_info": {
-                "mean_residual_m": round(self.mean_residual, 3),
-                "n_anchor_pairs": self.n_anchors,
-                "alpha": self.alpha
-            }
+        alignment_info = {
+            "mean_residual_m": round(self.mean_residual, 3),
+            "n_anchor_pairs": self.n_anchors,
+            "alpha": self.alpha,
         }
-
-        with open(out_path, 'w', encoding='utf-8') as f:
-            json.dump(cityjson, f, indent=2)
-
+        write_cands_cityjson(cands, out_path, self.output_crs, alignment_info=alignment_info)
         size_mb = os.path.getsize(out_path) / 1e6
         self.logger.info(
             f"[RigidAligner] Aligned CityJSON written: {out_path} "
-            f"({len(city_objects)} buildings, {size_mb:.1f} MB)"
+            f"({len(cands)} buildings, {size_mb:.1f} MB)"
         )
+
+
+# ---------------------------------------------------------------------------- #
+# Module-level helpers
+# ---------------------------------------------------------------------------- #
+
+def write_cands_cityjson(cands: dict, out_path, output_crs: str,
+                         alignment_info: Optional[dict] = None) -> None:
+    """
+    Serialise a cands sub-dict as CityJSON 1.1.
+
+    Used by:
+      - RigidAligner._write_cityjson    (post-alignment cands; passes alignment_info)
+      - pipeline_stages.stage_align      (post-disaster pre-alignment snapshot;
+                                          passes alignment_info=None)
+    """
+    out_path = str(out_path)
+    os.makedirs(os.path.dirname(out_path) or '.', exist_ok=True)
+
+    city_objects = {}
+    all_vertices = []
+    vertex_index = {}   # (x, y, z) rounded → global index
+
+    epsg_code = output_crs.split(":")[-1]
+
+    for bid, building in cands.items():
+        verts = building['vertices']
+
+        local_idx = {}
+        for v in verts:
+            key = (round(float(v[0]), 6), round(float(v[1]), 6), round(float(v[2]), 6))
+            if key not in vertex_index:
+                vertex_index[key] = len(all_vertices)
+                all_vertices.append(list(key))
+            local_idx[key] = vertex_index[key]
+
+        boundaries = []
+        for surface in building['polygon_mesh']:
+            ring = []
+            for coord in surface:
+                key = (round(float(coord[0]), 6), round(float(coord[1]), 6), round(float(coord[2]), 6))
+                if key not in vertex_index:
+                    key = min(
+                        local_idx.keys(),
+                        key=lambda k: (k[0]-key[0])**2 + (k[1]-key[1])**2 + (k[2]-key[2])**2
+                    )
+                ring.append(vertex_index[key])
+            boundaries.append([ring])
+
+        city_objects[f"bag_{bid}"] = {
+            "type": "Building",
+            "geometry": [{
+                "type": "Solid",
+                "lod": "2",
+                "boundaries": [boundaries]
+            }],
+            "attributes": building.get("attributes", {})
+        }
+
+    cityjson = {
+        "type": "CityJSON",
+        "version": "1.1",
+        "metadata": {
+            "referenceSystem": f"https://www.opengis.net/def/crs/EPSG/0/{epsg_code}"
+        },
+        "CityObjects": city_objects,
+        "vertices": all_vertices,
+    }
+    if alignment_info is not None:
+        cityjson["alignment_info"] = alignment_info
+
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(cityjson, f, indent=2)
