@@ -18,11 +18,13 @@ from tasks import calculate_features as calculate_features_task
 from tasks import load_bkafi_results as load_bkafi_task
 
 from pipeline import pipeline_bp
+from alignment import alignment_bp
 
 app = Flask(__name__)
 # Enable compression for all responses (gzip)
 Compress(app)
 app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
+app.register_blueprint(alignment_bp, url_prefix='/api/alignment')
 
 # Configuration
 BASE_DIR = Path(__file__).parent
