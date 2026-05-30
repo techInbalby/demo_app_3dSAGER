@@ -11,12 +11,24 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import tqdm
-import clip
 from PIL import Image
-import torch
 import pickle as pkl
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+# torch + clip are only needed for ViT-based image blocking, which the demo
+# does NOT exercise (we use BKAFI + XGBClassifier instead). Both are heavy
+# (~2 GB combined) and intentionally absent from the demo runtime image, so
+# guard the imports and skip the GPU probe when they're missing.
+try:
+    import torch                          # noqa: F401
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+except ImportError:
+    torch = None
+    device = "cpu"
+
+try:
+    import clip                           # noqa: F401  (real OpenAI CLIP)
+except ImportError:
+    clip = None
 
 
 def read_object_path_dict(dataset_config):

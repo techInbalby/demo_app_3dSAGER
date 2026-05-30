@@ -18,7 +18,11 @@ from tasks import calculate_features as calculate_features_task
 from tasks import load_bkafi_results as load_bkafi_task
 
 from pipeline import pipeline_bp
-from alignment import alignment_bp
+# Note: the demo's blueprint package is named align_api/ (not alignment/) to
+# avoid colliding with demo_infrance_pipeline/modules/alignment.py, which the
+# stage code puts on sys.path[0] via config_demo. URL prefix remains
+# /api/alignment so the frontend contract is unchanged.
+from align_api import alignment_bp
 
 app = Flask(__name__)
 # Enable compression for all responses (gzip)

@@ -68,7 +68,7 @@ Step 4 (Alignment) → align + save + prebake       (≈seconds + 4 sub-stages)
 - `app.py` (~1600 lines) — all legacy Flask routes + blueprint registrations. Single-file backend (refactor candidate).
 - `tasks.py` — `pipeline_run` Celery task + legacy `calculate_features` / `load_bkafi_results` (deprecated, kept for backward compat) + the legacy-bridging helpers (`_bridge_to_legacy` and friends).
 - `pipeline/` — Flask blueprint at `/api/pipeline`: `start`, `status/<task_id>`, `manifest`, `cache`. Cache helpers in `pipeline/cache.py`.
-- `alignment/` — Flask blueprint at `/api/alignment`: `status`, `anchors`, `matches/by_cand`, `matches/summary`, `cityjson?stage=…`, `buildings/colors?stage=4a..4d`. Loaders cache file reads by mtime in `alignment/loaders.py`.
+- `align_api/` — Flask blueprint at `/api/alignment`: `status`, `anchors`, `matches/by_cand`, `matches/summary`, `cityjson?stage=…`, `buildings/colors?stage=4a..4d`. Loaders cache file reads by mtime in `align_api/loaders.py`. (Package is named `align_api` rather than `alignment` to avoid colliding with `demo_infrance_pipeline/modules/alignment.py` on sys.path.)
 - `demo_infrance_pipeline/` — self-contained inference pipeline bundle.
   - `pipeline_stages.py` — five cache-aware `stage_*` functions + `run_through(target_stage, …)`.
   - `inference.py` — thin CLI around `run_through`.
