@@ -41,8 +41,16 @@ def parse_args():
     p.add_argument('--seed', type=int, default=1)
     p.add_argument('--no-disaster', action='store_true', help='Skip DisasterSimulator.')
     p.add_argument('--filter-shared-ids', action='store_true', help='Keep only cands whose ID is in index.')
-    p.add_argument('--match-threshold', type=float, default=DEFAULT_MATCH_THRESHOLD,
-                   help=f'Score threshold for predicted_match (default {DEFAULT_MATCH_THRESHOLD}).')
+    p.add_argument('--post-align-blocking', action='store_true',
+                   help='After RANSAC alignment is accepted, replace the BKAFI candidate pool with '
+                        'per-cand 1-NN against the full index in post-alignment coordinates. Lifts '
+                        'blocking recall from ~47%% (BKAFI) to ~100%% on the demo. Accept distance '
+                        'cutoff comes from config.Alignment.post_align_knn_cutoff (default 7 m).')
+    p.add_argument('--match-threshold', type=float, default=None,
+                   help=f'Score threshold for predicted_match in matches.csv. Default '
+                        f'{DEFAULT_MATCH_THRESHOLD} in hybrid mode (Gaussian spatial σ=3 m + α=0.3) '
+                        f'or 0.0 in --post-align-blocking mode (linear-taper score, threshold 0 '
+                        f'accepts every nearest within the cutoff).')
     p.add_argument('--cache-root', default=DEFAULT_CACHE_ROOT,
                    help='Root directory for per-input-hash cache dirs.')
     p.add_argument('--stage', default='align', choices=['preprocess', 'properties',
@@ -60,15 +68,24 @@ def main():
     np.random.seed(args.seed)
     logging.basicConfig(level=logging.INFO, format='%(message)s')
 
+    # match-threshold default depends on mode: DEFAULT_MATCH_THRESHOLD for hybrid
+    # (Gaussian + α blend), 0.0 for post-align-blocking (linear-taper score in
+    # [0,1]; threshold 0 accepts every cand whose nearest index is within the
+    # distance cutoff).
+    if args.match_threshold is None:
+        args.match_threshold = 0.0 if args.post_align_blocking else DEFAULT_MATCH_THRESHOLD
+
     input_hash = compute_input_hash(args.cands, args.index)
     cache_dir = ensure_cache_dir(args.cache_root, input_hash)
 
+    mode = 'post-align-knn' if args.post_align_blocking else 'hybrid'
     print("=" * 72)
-    print(f"3dSAGER inference  |  seed={args.seed}  |  disaster={'no' if args.no_disaster else 'yes'}")
+    print(f"3dSAGER inference  |  seed={args.seed}  |  disaster={'no' if args.no_disaster else 'yes'}  |  mode={mode}")
     print(f"  cands     : {args.cands}")
     print(f"  index     : {args.index}")
     print(f"  cache_dir : {cache_dir}")
     print(f"  stage     : up to '{args.stage}'")
+    print(f"  threshold : {args.match_threshold}")
     print("=" * 72)
 
     summary = run_through(
@@ -80,6 +97,7 @@ def main():
         match_threshold=args.match_threshold,
         apply_disaster=not args.no_disaster,
         filter_shared_ids=args.filter_shared_ids,
+        post_align_blocking=args.post_align_blocking,
         progress_cb=_print_progress,
     )
 

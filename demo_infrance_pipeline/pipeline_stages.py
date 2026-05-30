@@ -26,6 +26,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import joblib
 import numpy as np
 import pandas as pd
+from scipy.spatial import KDTree
 
 import config
 from preprocess_single import preprocess_files
@@ -293,6 +294,7 @@ def stage_classify(cache_dir: Path, progress_cb=None) -> List[Tuple[str, str, fl
 
 def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
                 match_threshold: float = DEFAULT_MATCH_THRESHOLD,
+                post_align_blocking: bool = False,
                 progress_cb=None) -> dict:
     """
     RANSAC rigid alignment + re-score + write all Step-4 artifacts.
@@ -305,13 +307,25 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
       - matches_by_cand.json               same table grouped by cand_id, demo-app schema
       - metrics_summary.json               P/R/F1 at threshold + PR sweep
       - alignment_info.json                aligner summary (residual, anchor count, alpha)
+
+    If `post_align_blocking` is True and the aligner succeeds, the BKAFI
+    candidate pool is replaced by per-cand 1-NN against the full index in
+    post-alignment coordinates (see `post_align_knn_block`). Lifts blocking
+    recall from ~47%% (BKAFI ceiling on the demo) to ~100%%.
     """
     aligned_path = Path(cache_dir) / f"aligned_candidates_seed{seed}.json"
     info_path = Path(cache_dir) / "alignment_info.json"
+    # Cache hit only if the cached run matches the requested mode (otherwise the
+    # metrics + matches.csv on disk are from a different scoring regime).
     if aligned_path.exists() and info_path.exists():
-        _record_stage(cache_dir, 'align', 0.0, cache_hit=True)
-        with open(info_path) as f:
-            return json.load(f)
+        try:
+            with open(info_path) as f:
+                cached_info = json.load(f)
+            if bool(cached_info.get('post_align_blocking', False)) == bool(post_align_blocking):
+                _record_stage(cache_dir, 'align', 0.0, cache_hit=True)
+                return cached_info
+        except (json.JSONDecodeError, OSError):
+            pass  # fall through to recompute
 
     object_dict = joblib.load(Path(cache_dir) / "object_dict.joblib")
     scored_pairs = joblib.load(Path(cache_dir) / "scored_pairs.joblib")
@@ -329,6 +343,15 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     )
 
     # --- 2. Run RigidAligner ---
+    # Snapshot pre-alignment cand centroids BEFORE the aligner mutates them in
+    # place via _apply_transform_to_geometry — required for post-align-blocking
+    # mode (1-NN against the index in post-alignment coordinates).
+    pre_alignment_cand_centroids = None
+    if post_align_blocking:
+        pre_alignment_cand_centroids = {
+            bid: np.asarray(data['centroid'], dtype=np.float64).copy()
+            for bid, data in object_dict['cands'].items()
+        }
     # RigidAligner._write_cityjson writes to config.FilePaths.results_path. We
     # redirect it here so the aligned CityJSON lands in cache_dir.
     prev_results_path = config.FilePaths.results_path
@@ -344,6 +367,26 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
         )
     finally:
         config.FilePaths.results_path = prev_results_path
+
+    # --- 2b. Optional: replace BKAFI candidate pool with post-alignment 1-NN ---
+    # Lifts blocking recall from ~47%% (BKAFI ceiling on demo data) to ~100%%
+    # by querying the full index spatially after RANSAC instead of relying on
+    # BKAFI's geometric-feature shortlist.
+    n_gt_override = None
+    if post_align_blocking and aligner.alignment_succeeded:
+        if progress_cb: progress_cb('align', 'post-alignment KNN re-blocking')
+        cutoff_m = float(config.Alignment.post_align_knn_cutoff)
+        scored_pairs, rescored_pairs = post_align_knn_block(
+            object_dict, aligner, pre_alignment_cand_centroids, cutoff_m=cutoff_m,
+        )
+        # Fair denominator for metrics: every cand whose true counterpart exists
+        # in the index is in principle recoverable post-alignment, regardless of
+        # whether BKAFI ever surfaced it.
+        n_gt_override = len(set(object_dict['cands'].keys()) & set(object_dict['index'].keys()))
+        logger.info(f"[stage_align] post-align-blocking on; shared-population denominator = {n_gt_override}")
+    elif post_align_blocking and not aligner.alignment_succeeded:
+        logger.warning("[stage_align] post-align-blocking requested but alignment was "
+                       "rejected; falling back to BKAFI pool + geometric scores.")
 
     # --- 3. Dump anchor pairs (the pool RANSAC was given) ---
     if progress_cb: progress_cb('align', 'writing anchor pairs')
@@ -363,7 +406,8 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
 
     # --- 4. matches.csv + matches.parquet + matches_by_cand.json + metrics ---
     if progress_cb: progress_cb('align', 'saving matches and metrics')
-    df, metrics = _build_matches_tables(scored_pairs, rescored_pairs, match_threshold)
+    df, metrics = _build_matches_tables(scored_pairs, rescored_pairs, match_threshold,
+                                        n_gt_override=n_gt_override)
     df.to_csv(Path(cache_dir) / "matches.csv", index=False)
     try:
         df.to_parquet(Path(cache_dir) / "matches.parquet", index=False)
@@ -385,6 +429,7 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
         'confidence_threshold': float(confidence_threshold),
         'match_threshold': float(match_threshold),
         'seed': int(seed),
+        'post_align_blocking': bool(post_align_blocking),
     }
     _atomic_write_json(info, info_path)
 
@@ -412,6 +457,7 @@ def run_through(target_stage: str, cache_dir: Path, *,
                 match_threshold: float = DEFAULT_MATCH_THRESHOLD,
                 apply_disaster: bool = True,
                 filter_shared_ids: bool = False,
+                post_align_blocking: bool = False,
                 progress_cb=None) -> dict:
     """
     Run every stage up to and including `target_stage`, in order. Each stage is
@@ -431,6 +477,7 @@ def run_through(target_stage: str, cache_dir: Path, *,
                              filter_shared_ids=filter_shared_ids, progress_cb=progress_cb)
         elif s == 'align':
             summary = stage_align(cache_dir, seed=seed, match_threshold=match_threshold,
+                                  post_align_blocking=post_align_blocking,
                                   progress_cb=progress_cb)
         else:
             STAGE_FUNCS[s](cache_dir, progress_cb=progress_cb)
@@ -444,6 +491,52 @@ def run_through(target_stage: str, cache_dir: Path, *,
 # Internal helpers
 # ---------------------------------------------------------------------------- #
 
+def post_align_knn_block(object_dict, aligner, pre_alignment_cand_centroids, cutoff_m):
+    """
+    Replace the BKAFI candidate pool with per-cand 1-NN against the full index
+    in post-alignment coordinates. Score is a linear taper: 1 at d=0, 0 at
+    d=cutoff_m, negative beyond.
+
+    Snapshot of pre-alignment cand centroids must be passed in — RigidAligner.run
+    mutates object_dict['cands'] centroids in place via _apply_transform_to_geometry.
+
+    Returns
+    -------
+    new_scored : list of (cand_id, index_id, geometric_score)
+        geometric_score is NaN because these pairs were never run through the
+        classifier.
+    new_rescored : list of (cand_id, index_id, final_score)
+        final_score = 1 - d / cutoff_m  (not clamped — d > cutoff yields a
+        negative score, so --match-threshold 0 accepts exactly d ≤ cutoff).
+    """
+    idx_ids = list(object_dict['index'].keys())
+    idx_pts = np.asarray(
+        [np.asarray(object_dict['index'][bid]['centroid'], dtype=np.float64) for bid in idx_ids],
+        dtype=np.float64,
+    )
+    tree = KDTree(idx_pts)
+
+    new_scored, new_rescored = [], []
+    within_cutoff = 0
+    for cid, qc in pre_alignment_cand_centroids.items():
+        aligned = aligner.R @ qc + aligner.t
+        d_arr, i_arr = tree.query(aligned.reshape(1, -1), k=1)
+        d = float(d_arr[0])
+        ii = int(i_arr[0])
+        # Linear taper, NOT clamped: score = 1 at d=0, score = 0 at d=cutoff,
+        # negative beyond. `--match-threshold 0` then accepts exactly d ≤ cutoff,
+        # higher thresholds carve out tighter distance bands inside the cutoff.
+        score = 1.0 - d / cutoff_m
+        nearest_id = idx_ids[ii]
+        new_scored.append((cid, nearest_id, float('nan')))
+        new_rescored.append((cid, nearest_id, score))
+        if d <= cutoff_m:
+            within_cutoff += 1
+    logger.info(f"[post_align_knn_block] {len(new_rescored)} cand→1-NN pairs, "
+                f"{within_cutoff}/{len(new_rescored)} within {cutoff_m:.1f} m cutoff")
+    return new_scored, new_rescored
+
+
 def _load_ground_truth(cache_dir: Path):
     p = Path(cache_dir) / "disaster_log.json"
     if not p.exists():
@@ -455,21 +548,32 @@ def _load_ground_truth(cache_dir: Path):
     return R, t
 
 
-def _build_matches_tables(scored_pairs, rescored_pairs, match_threshold):
+def _build_matches_tables(scored_pairs, rescored_pairs, match_threshold,
+                          n_gt_override=None):
+    """
+    n_gt_override: if provided, overrides the recall denominator. Default is the
+    count of same-ID pairs in `scored_pairs` (in-pool population). With
+    post-align-blocking, callers pass the count of shared BAG IDs (the full
+    recoverable population) so recall is measured fairly against everything the
+    alignment could in principle find.
+    """
     rescored_by_pair = {(c, i): s for c, i, s in rescored_pairs}
     rows = []
     for cid, iid, geo_score in scored_pairs:
         final = rescored_by_pair.get((cid, iid), geo_score)
+        # NaN-safe: in post-align-blocking mode geometric_score is NaN
+        # because these pairs were never scored by the classifier.
+        geo_out = round(geo_score, 4) if (geo_score == geo_score) else float('nan')
         rows.append({
             'cand_id': cid,
             'index_id': iid,
-            'geometric_score': round(geo_score, 4),
+            'geometric_score': geo_out,
             'final_score': round(final, 4),
             'predicted_match': int(final >= match_threshold),
             'same_id': int(cid == iid),
         })
     df = pd.DataFrame(rows).sort_values('final_score', ascending=False)
-    n_pos = int(df['same_id'].sum())
+    n_pos = int(df['same_id'].sum()) if n_gt_override is None else int(n_gt_override)
     metrics = None
     if n_pos > 0:
         def pr_at(t):
