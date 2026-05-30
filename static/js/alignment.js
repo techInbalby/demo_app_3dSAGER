@@ -201,8 +201,76 @@
       `α (geometric weight): <strong>${alpha}</strong>`
     );
   }
+  function _renderPrSweepSvg(sweep) {
+    // Tiny inline SVG. x = recall, y = precision, with the current threshold
+    // point highlighted. Sweep is [{threshold, precision, recall, f1, ...}, ...].
+    if (!sweep || !sweep.length) return '';
+    const W = 220, H = 110, pad = 22;
+    const xs = sweep.map(p => Math.max(0, Math.min(1, p.recall)));
+    const ys = sweep.map(p => Math.max(0, Math.min(1, p.precision)));
+    const x = (r) => pad + r * (W - 2 * pad);
+    const y = (p) => (H - pad) - p * (H - 2 * pad);
+
+    // Sort by recall so the polyline traces left → right cleanly.
+    const idxSorted = sweep.map((_, i) => i).sort((a, b) => xs[a] - xs[b]);
+    const pts = idxSorted.map(i => `${x(xs[i]).toFixed(1)},${y(ys[i]).toFixed(1)}`).join(' ');
+
+    const dots = sweep.map((p, i) =>
+      `<circle cx="${x(xs[i]).toFixed(1)}" cy="${y(ys[i]).toFixed(1)}" r="2.5" fill="#667eea"/>` +
+      `<title>thr=${p.threshold}  P=${p.precision}  R=${p.recall}  F1=${p.f1}</title>`
+    ).join('');
+
+    return (
+      `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="margin-top:6px; background:#fafafa; border:1px solid #ddd; border-radius:3px;">` +
+      `  <line x1="${pad}" y1="${H-pad}" x2="${W-pad}" y2="${H-pad}" stroke="#aaa"/>` +
+      `  <line x1="${pad}" y1="${pad}"    x2="${pad}"  y2="${H-pad}" stroke="#aaa"/>` +
+      `  <text x="${pad}" y="${H-6}" font-size="9" fill="#666">recall →</text>` +
+      `  <text x="2" y="${pad+8}" font-size="9" fill="#666" transform="rotate(-90 ${pad-12} ${pad+8})">precision</text>` +
+      `  <polyline points="${pts}" fill="none" stroke="#667eea" stroke-width="1.2"/>` +
+      `  ${dots}` +
+      `</svg>`
+    );
+  }
+
   async function _show4d() {
-    _setInfoCard('Sub-stage 4d (Final matches) — implementation pending.');
+    // Aligned layer must be loaded and visible (same scene as 4c).
+    await _loadLayerOnce(ALIGNED_LAYER, ALIGNED_URL, 'A');
+    if (_ownedLayers.has(MISALIGNED_LAYER)) _setLayerVisible(MISALIGNED_LAYER, false);
+    _setLayerVisible(ALIGNED_LAYER, true);
+
+    const viewer = await _waitForViewer();
+    const colors = await _fetchColors('4d');
+    if (typeof viewer.updateBuildingColors === 'function') {
+      await viewer.updateBuildingColors(colors.cand_colors || {}, ALIGNED_LAYER);
+      const indexLayer = _findIndexLayer();
+      if (indexLayer) await viewer.updateBuildingColors({}, indexLayer);
+    }
+
+    // Header card with P/R/F1 + PR sweep mini-chart.
+    let summary = null;
+    try {
+      const res = await fetch('/api/alignment/matches/summary');
+      if (res.ok) summary = await res.json();
+    } catch (_) {}
+
+    let body;
+    if (summary && summary.at_match_threshold) {
+      const m = summary.at_match_threshold;
+      const sweepSvg = _renderPrSweepSvg(summary.pr_sweep);
+      body =
+        `<strong>4d · Final matches (post-alignment)</strong><br>` +
+        `Best <code>final_score</code> per cand → TP / FP / FN / no-match colouring.<br>` +
+        `At threshold <strong>${m.threshold}</strong>: ` +
+        `TP=<strong>${m.tp}</strong> · FP=<strong>${m.fp}</strong> · FN=<strong>${m.fn}</strong> · ` +
+        `P=<strong>${m.precision}</strong> · R=<strong>${m.recall}</strong> · F1=<strong>${m.f1}</strong>` +
+        sweepSvg;
+    } else {
+      body =
+        `<strong>4d · Final matches</strong><br>` +
+        `Coloured by per-cand best final_score (no ground-truth metrics ` +
+        `available — no same-ID pairs in the blocking output).`;
+    }
+    _setInfoCard(body);
   }
 
   const RENDERERS = { '4a': _show4a, '4b': _show4b, '4c': _show4c, '4d': _show4d };
