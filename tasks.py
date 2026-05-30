@@ -165,7 +165,8 @@ def load_bkafi_results():
 
 @celery.task(bind=True, name='tasks.pipeline.run')
 def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
-                 seed=1, match_threshold=0.40, apply_disaster=True):
+                 seed=1, match_threshold=None, apply_disaster=True,
+                 post_align_blocking=True):
     """
     Run pipeline stages up to and including `target_stage`. Each stage is
     individually cache-aware, so unnecessary work is skipped on re-runs.
@@ -173,12 +174,24 @@ def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
     After stage_align the two generated CityJSON files (post_disaster_cands
     and aligned_candidates_seed{N}) are pre-baked in place so the viewer can
     fetch the WGS84 variant directly.
+
+    `post_align_blocking` defaults to True for the demo: after RANSAC succeeds
+    the BKAFI candidate pool is replaced by per-cand 1-NN against the full
+    index in post-alignment coordinates. Lifts blocking recall from ~47% to
+    ~93% end-to-end F1 in the 500 m translation regime.
+    `match_threshold` defaults to 0.0 when post_align_blocking is on (linear-
+    taper score, threshold 0 accepts every nearest within the cutoff) or
+    DEFAULT_MATCH_THRESHOLD (0.40) in hybrid mode.
     """
     # Import lazily so the celery module can be imported in environments that
     # don't have the full pipeline dependency tree (e.g. CI for the web layer
     # alone). When this task actually runs in the worker, all deps are present.
     import pipeline_stages
     import prebake_cityjson
+
+    # Mode-dependent threshold default — mirrors inference.py's CLI behaviour.
+    if match_threshold is None:
+        match_threshold = 0.0 if post_align_blocking else pipeline_stages.DEFAULT_MATCH_THRESHOLD
 
     cache_dir = PIPELINE_CACHE_ROOT / input_hash
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -201,6 +214,7 @@ def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
         seed=seed,
         match_threshold=match_threshold,
         apply_disaster=apply_disaster,
+        post_align_blocking=post_align_blocking,
         progress_cb=progress_cb,
     )
 
