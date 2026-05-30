@@ -1563,9 +1563,13 @@ function setPipelineFile(filePath) {
     if (window.viewer && window.viewer.applyLayerVisualStyles) {
         window.viewer.applyLayerVisualStyles(selectedFile);
     }
-    // Also re-run pipeline stage colors if a stage has already been completed
+    // Also re-run pipeline stage colors if a stage has already been completed.
+    // Step 4 (alignment) wins over Step 3 if both are done — Step 4 owns the
+    // final post-alignment coloring.
     if (window.viewer && selectedFile) {
-        if (pipelineState.step3Completed) updateBuildingColorsForStage3(true);
+        if (pipelineState.step4Completed && window.AlignmentStep && typeof window.AlignmentStep.reapplyColors === 'function') {
+            window.AlignmentStep.reapplyColors();
+        } else if (pipelineState.step3Completed) updateBuildingColorsForStage3(true);
         else if (pipelineState.step2Completed) updateBuildingColorsForStage2(true);
         else if (pipelineState.step1Completed) updateBuildingColorsForStage1(true);
     }
@@ -1663,11 +1667,9 @@ function updateViewerLegend() {
             <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(97,97,97);"></span>No match</div>`;
         }
         if (anyALoaded && ps.step4Completed) {
-            html += `<div class="viewer-legend-group" style="margin-top:6px;">Spatial alignment</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(220,110,60);"></span>Misaligned candidate (4a)</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(170,90,230);"></span>Anchor (candidate side) (4b)</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(0,200,230);"></span>Anchor (index side) (4b)</div>
-            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(120,80,140);"></span>False negative (4d)</div>`;
+            // Step 4 adds one new color on top of Step 3's TP/FP/no-match —
+            // false_negative for cands whose true match was missed post-alignment.
+            html += `<div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(120,80,140);"></span>False negative (post-alignment)</div>`;
         }
         const loadedCount = allA.filter(f => layerState[f.path]?.visible).length
                           + allB.filter(f => layerState[f.path]?.visible).length;
@@ -3643,19 +3645,14 @@ function viewResults() {
                 updatePipelineUI();
                 updateViewerLegend();
                 advanceTutorialForPipelineAction('viewResults');
-                const summaryBtn = document.getElementById('step-btn-3-summary');
-                if (summaryBtn) summaryBtn.style.display = 'block';
 
-                // Enable Step 4 (Spatial Alignment) now that the classifier has run.
+                // Enable Step 4 (Spatial Alignment) — the headline summary now
+                // lives there, since Step 4 is the last stage.
                 const step4Btn = document.getElementById('step-btn-4');
                 if (step4Btn) step4Btn.disabled = false;
 
                 updateBuildingColorsForStage3(true, () => {
                     hideLoading();
-                    const tutorialGuide = document.getElementById('tutorial-guide');
-                    if (!tutorialGuide || tutorialGuide.style.display === 'none') {
-                        showClassifierResultsSummary(results);
-                    }
                 });
                 stepBtn.textContent = 'Completed';
                 stepBtn.style.background = '#28a745';
@@ -3722,16 +3719,13 @@ function updatePipelineUI() {
     // Step 3: default blue when current, green when completed
     const step3El = document.getElementById('step-3');
     const step3Status = step3El ? step3El.querySelector('.step-status') : null;
-    const step3SummaryBtn = document.getElementById('step-btn-3-summary');
     if (step3El) {
         step3El.classList.remove('step-completed');
         if (pipelineState.step3Completed) {
             step3El.classList.add('step-completed');
             if (step3Status) { step3Status.innerHTML = '✓'; step3Status.className = 'step-status completed'; }
-            if (step3SummaryBtn) step3SummaryBtn.style.display = 'block';
-        } else {
-            if (step3Status) { step3Status.innerHTML = ''; step3Status.className = 'step-status'; }
-            if (step3SummaryBtn) step3SummaryBtn.style.display = 'none';
+        } else if (step3Status) {
+            step3Status.innerHTML = ''; step3Status.className = 'step-status';
         }
     }
 
@@ -4257,175 +4251,6 @@ function showBuildingMatches(buildingId, buildingName, matches) {
         document.body.appendChild(overlay);
     }
     overlay.classList.add('active');
-}
-
-// Show classifier results summary
-function showClassifierResultsSummary(data) {
-    const summaryWindow = document.getElementById('results-summary-window');
-    const summaryContent = document.getElementById('results-summary-content');
-    
-    if (!summaryWindow || !summaryContent) {
-        console.error('Results summary window elements not found');
-        return;
-    }
-    
-    // Clear previous content
-    summaryContent.innerHTML = '';
-    
-    // Accept either an array of {filePath, data} entries or a single data object
-    const summaries = Array.isArray(data)
-        ? data
-        : [{ filePath: selectedFile, data }];
-
-    // Create summary display
-    const _summaryDefaults = {
-        total_buildings: 0,
-        total_buildings_in_file: 0,
-        potential_true_matches: 0,
-        potential_true_matches_not_in_bkafi: 0,
-        buildings_with_true_match_in_bkafi: 0,
-        found_true_matches: 0,
-        recall: 0,
-        overall_recall: 0,
-        blocking_recall: 0,
-        matching_recall: 0,
-        precision: 0,
-        precision_conf_threshold: 0,
-        precision_highest_conf: 0,
-        predicted_with_conf_threshold: 0,
-        predicted_highest_conf: 0,
-        true_positive: 0,
-        false_positive: 0,
-        false_negative: 0,
-        best_match_true_positives: 0,
-        best_match_false_positives: 0,
-        best_match_false_negative_in_blocking: 0,
-        best_match_false_negative_not_in_blocking: 0,
-        true_matches_not_in_blocking: 0,
-        total_pairs: 0,
-        overall_recall: 0,
-        blocking_recall: 0,
-        matching_recall: 0,
-        f1_score: 0,
-        best_match_f1_score: 0
-    };
-    
-    const getFileName = (fp) => fp ? fp.split('/').pop() : 'Unknown File';
-    const pct = (v) => (v * 100).toFixed(1) + '%';
-    const row = (label, value, color, help, sub = '') => `
-        <tr class="srow">
-            <td class="srow-label">${label} <button class="info-badge" data-help="${help}">i</button></td>
-            <td class="srow-value" style="color:${color};">${value}</td>
-            ${sub ? `<td class="srow-sub">${sub}</td>` : '<td></td>'}
-        </tr>`;
-    const groupRow = (label) => `
-        <tr><td colspan="3" class="srow-group">${label}</td></tr>`;
-
-    const buildSection = (summary, filePath, idx) => `
-        <div class="summary-section${idx > 0 ? ' summary-section--sep' : ''}">
-            <div class="summary-file-label">${getFileName(filePath)}</div>
-            <table class="summary-table">
-                <tbody>
-                    ${groupRow('Coverage')}
-                    ${row('True matches in BKAFI',     summary.potential_true_matches,             '#2196f3', 'Buildings in both Source A and B that appear in BKAFI blocking sets.')}
-                    ${row('True matches NOT in BKAFI', summary.potential_true_matches_not_in_bkafi, '#ff9800', 'Buildings in both sources but absent from BKAFI blocking.')}
-                    ${groupRow('Recall')}
-                    ${row('Overall recall',     pct(summary.overall_recall),   '#4caf50', 'Of all potential true matches, how many were correctly found end-to-end.')}
-                    ${row('BKAFI blocking recall', pct(summary.blocking_recall), '#ff9800', 'Of all potential true matches, how many entered BKAFI blocking.')}
-                    ${row('Matching recall',    pct(summary.matching_recall),  '#2196f3', 'Of true matches that reached blocking, how many the classifier found.')}
-                    ${groupRow('Precision')}
-                    ${row('Precision (conf > 0.5)', pct(summary.precision_conf_threshold), '#ff9800', 'Among all pairs predicted with confidence > 0.5, fraction that are true matches.', summary.predicted_with_conf_threshold + ' pairs')}
-                    ${row('Precision (best match)',  pct(summary.precision_highest_conf),  '#9c27b0', 'Best-match strategy: one prediction per candidate.', summary.predicted_highest_conf + ' pairs')}
-                    ${groupRow('Pair counts (best match)')}
-                    ${row('True positive',             summary.best_match_true_positives || summary.true_positive, '#4caf50', 'Correctly predicted matches.')}
-                    ${row('False positive',            summary.best_match_false_positives || summary.false_positive, '#f44336', 'Incorrectly predicted matches.')}
-                    ${row('False negative (in BKAFI)', summary.best_match_false_negative_in_blocking || 0, '#ff9800', 'Missed true matches that were in BKAFI blocking.')}
-                    ${row('False negative (no BKAFI)', summary.best_match_false_negative_not_in_blocking || 0, '#fbc02d', 'Missed true matches that never reached blocking.')}
-                    ${groupRow('Score')}
-                    ${row('F1 (best match)', pct(summary.best_match_f1_score), '#333', 'Harmonic mean of precision and recall for the best-match strategy.')}
-                </tbody>
-            </table>
-        </div>
-    `;
-
-    const summaryHTML = `<div style="padding: 0; box-sizing: border-box;">
-        ${summaries.length > 1 ? `<h4 style="margin-top:0;color:#667eea;margin-bottom:10px;">Matching Results Summary (${summaries.length} files)</h4>` : '<h4 style="margin-top:0;color:#667eea;margin-bottom:10px;">Matching Results Summary (Per File)</h4>'}
-        ${summaries.map((entry, idx) => {
-            const s = (entry.data ? entry.data.summary : entry.summary) || _summaryDefaults;
-            const fp = entry.filePath || selectedFile;
-            return buildSection(s, fp, idx);
-        }).join('')}
-    </div>`;
-    
-    summaryContent.innerHTML = summaryHTML;
-    initSummaryHelpHandlers();
-    
-    // Show the window
-    summaryWindow.style.display = 'block';
-    
-    // Add overlay
-    let overlay = document.getElementById('results-summary-overlay');
-    if (!overlay) {
-        overlay = document.createElement('div');
-        overlay.id = 'results-summary-overlay';
-        overlay.className = 'matches-overlay';
-        overlay.onclick = closeResultsSummaryWindow;
-        document.body.appendChild(overlay);
-    }
-    overlay.classList.add('active');
-}
-
-// Show summary from Step 3 (Matching Classifier)
-function showSummaryFromStep3() {
-    if (!pipelineState.step3Completed) {
-        alert('Please complete Matching Classifier first.');
-        return;
-    }
-    
-    const targetFiles = getSelectedSummaryFiles();
-    if (targetFiles.length === 0) {
-        alert('Please select a file first.');
-        return;
-    }
-    
-    console.log('Loading classifier results summary from Step 3');
-    
-    // Show loading overlay
-    showLoading('Loading classifier results summary...');
-    
-    Promise.all(
-        targetFiles.map((filePath) =>
-            fetch(`/api/classifier/summary?file=${encodeURIComponent(filePath)}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) throw new Error(data.error);
-                    return { filePath, data };
-                })
-        )
-    )
-        .then(results => {
-            hideLoading();
-            showClassifierResultsSummary(results);
-        })
-        .catch(error => {
-            hideLoading();
-            console.error('Error loading summary:', error);
-            alert('Error loading classifier results summary: ' + error.message);
-        });
-}
-
-// Close results summary window
-function closeResultsSummaryWindow() {
-    const summaryWindow = document.getElementById('results-summary-window');
-    const overlay = document.getElementById('results-summary-overlay');
-    
-    if (summaryWindow) {
-        summaryWindow.style.display = 'none';
-    }
-    
-    if (overlay) {
-        overlay.classList.remove('active');
-    }
 }
 
 function initSummaryHelpHandlers() {

@@ -87,7 +87,6 @@
                         <h4>Matching Classifier</h4>
                         <p>Run Bagging Classifier</p>
                         <button class="step-btn" id="step-btn-3" onclick="viewResults()" disabled>Run Classifier</button>
-                        <button class="step-btn" id="step-btn-3-summary" onclick="showSummaryFromStep3()" style="display: none; margin-top: 10px; background: #667eea;">Show Summary</button>
                     </div>
                 </div>
 
@@ -98,20 +97,7 @@
                         <h4>Spatial Alignment</h4>
                         <p>RANSAC rigid alignment + spatial re-scoring</p>
                         <button class="step-btn" id="step-btn-4" onclick="window.AlignmentStep.run()" disabled>Run Alignment</button>
-                        <div id="step-4-substages" class="step-substages" style="display:none; margin-top:10px;">
-                            <div class="substage-track" style="display:flex; gap:4px; margin-bottom:6px;">
-                                <button class="substage-btn" data-substage="4a" onclick="window.AlignmentStep.setSubStage('4a')">4a Misaligned</button>
-                                <button class="substage-btn" data-substage="4b" onclick="window.AlignmentStep.setSubStage('4b')">4b Anchors</button>
-                                <button class="substage-btn" data-substage="4c" onclick="window.AlignmentStep.setSubStage('4c')">4c Transform</button>
-                                <button class="substage-btn" data-substage="4d" onclick="window.AlignmentStep.setSubStage('4d')">4d Matches</button>
-                            </div>
-                            <div class="substage-controls" style="display:flex; gap:4px; align-items:center;">
-                                <button class="substage-nav-btn" onclick="window.AlignmentStep.prev()">← Prev</button>
-                                <button class="substage-nav-btn" id="substage-play-btn" onclick="window.AlignmentStep.toggleAutoAdvance()">▶ Auto</button>
-                                <button class="substage-nav-btn" onclick="window.AlignmentStep.next()">Next →</button>
-                            </div>
-                            <div id="step-4-info-card" class="substage-info" style="margin-top:8px; font-size:12px; color:#555;"></div>
-                        </div>
+                        <div id="step-4-info-card" class="substage-info" style="display:none; margin-top:8px; font-size:12px; color:#555;"></div>
                     </div>
                 </div>
             </div>
@@ -177,18 +163,6 @@
         </div>
     </div>
 
-    <!-- Classifier Results Summary Window -->
-    <div id="results-summary-window" class="matches-window" style="display: none;">
-        <div class="matches-header">
-            <h3>Classifier Results Summary</h3>
-            <button class="close-btn" onclick="closeResultsSummaryWindow()">×</button>
-        </div>
-        <div class="matches-content">
-            <div id="results-summary-content">
-                <!-- Summary will be populated here -->
-            </div>
-        </div>
-    </div>
 
     <!-- Matches Window (kept for backward compatibility, but not used for Step 3) -->
     <div id="matches-window" class="matches-window" style="display: none;">
