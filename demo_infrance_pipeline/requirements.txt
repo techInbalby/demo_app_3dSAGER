@@ -1,0 +1,40 @@
+# 3dSAGER — Python 3.9
+# Install with: pip install -r requirements.txt
+# Note: faiss should be installed via conda: conda install -c conda-forge faiss-cpu
+
+# Core ML / data
+numpy==1.26.4
+pandas==2.3.2
+scikit-learn==1.6.1
+xgboost==2.1.4
+scipy==1.13.1
+joblib==1.5.2
+
+# Geometry / GIS
+shapely==2.0.5
+pyproj==3.6.1
+geopandas==0.14.4
+
+# Visualisation
+matplotlib==3.9.2
+
+# Utilities
+tqdm==4.67.1
+Pillow==9.4.0
+
+# Vector search (install via conda for best performance)
+# conda install -c conda-forge faiss-cpu
+# pip fallback:
+faiss-cpu==1.9.0
+
+# Deep learning (optional — required only for ViT-based blocking)
+torch==2.5.1
+torchvision==0.20.1
+# CLIP (OpenAI):
+# pip install git+https://github.com/openai/CLIP.git
+
+# Optional — CityGML utilities (generateCityGML.py, randomiseCity.py only)
+# lxml>=4.9
+
+clip 
+pyarrow
