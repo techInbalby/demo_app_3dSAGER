@@ -375,6 +375,11 @@ features_cache = {}
 bkafi_cache = None
 # In-process cache for computed buildings status (keyed by file_path)
 _buildings_status_cache: dict = {}
+# Last invalidation stamp this process has applied. The Celery worker bumps
+# 'buildings_status:stamp' in Redis after each pipeline_stages bridge; the
+# routes that read _buildings_status_cache check this stamp on entry and clear
+# the in-memory cache when it changes. See tasks.py:_bridge_to_legacy.
+_last_invalidation_stamp_seen: float = 0.0
 
 
 def invalidate_buildings_status_cache(file_path: str = None):
@@ -384,6 +389,19 @@ def invalidate_buildings_status_cache(file_path: str = None):
         _buildings_status_cache.pop(file_path, None)
     else:
         _buildings_status_cache.clear()
+
+
+def _check_invalidation_stamp():
+    """Drop the in-memory buildings-status cache if Celery has bumped the stamp
+    since we last looked. Cheap (one Redis GET) and safe across gunicorn workers."""
+    global _last_invalidation_stamp_seen
+    try:
+        current = cache_get_json('buildings_status:stamp') or 0
+    except Exception:
+        return
+    if current and current > _last_invalidation_stamp_seen:
+        invalidate_buildings_status_cache()
+        _last_invalidation_stamp_seen = current
 
 @app.route('/api/features/calculate', methods=['POST'])
 def calculate_all_features():
@@ -1339,6 +1357,10 @@ def get_all_buildings_status():
         file_path = request.args.get('file', '')
         if not file_path:
             return jsonify({'error': 'No file path provided'}), 400
+
+        # If the Celery worker bumped the cross-process stamp since we last
+        # checked, drop our in-memory cache before serving anything.
+        _check_invalidation_stamp()
 
         # Return cached result if available (invalidated when BKAFI or features data changes)
         if file_path in _buildings_status_cache:

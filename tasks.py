@@ -252,6 +252,8 @@ def _bridge_to_legacy(cache_dir: Path, cands_path: str, target_stage: str) -> No
         f"RawCitiesData/The Hague/Source A/{cands_basename}",
     ]
 
+    touched_redis = False
+
     prop_path = cache_dir / "property_dict.joblib"
     if prop_path.exists():
         property_dict = joblib.load(prop_path)
@@ -260,26 +262,49 @@ def _bridge_to_legacy(cache_dir: Path, cands_path: str, target_stage: str) -> No
         for k in keys:
             _cache_set_json(f'features:{k}', building_features)
             _cache_set_json(f'features_ids:{k}', ids)
+        touched_redis = True
 
     scored_path = cache_dir / "scored_pairs.joblib"
-    if scored_path.exists() and target_stage in ('classify', 'align'):
+    blocking_path = cache_dir / "blocking_pairs.joblib"
+    classify_or_align = target_stage in ('classify', 'align')
+
+    if scored_path.exists() and classify_or_align:
         scored_pairs = joblib.load(scored_path)
         bkafi_flat = _scored_to_bkafi_flat(scored_pairs)
         _cache_set_json('bkafi:flat', bkafi_flat)
         _cache_set_json('bkafi:by_file', {cands_basename: bkafi_flat})
 
+        # Legacy demo_inference JSONs — kept in sync so the existing /api/
+        # classifier/summary and similar routes continue to work.
         metrics_payload = _compute_legacy_metrics(scored_pairs, cands_basename)
         legacy_metrics_path = RESULTS_DIR / 'demo_inference' / 'demo_metrics_summary_seed1.json'
         legacy_metrics_path.parent.mkdir(parents=True, exist_ok=True)
         with open(legacy_metrics_path, 'w', encoding='utf-8') as f:
             json.dump(metrics_payload, f, indent=2, default=_json_default)
 
-        # The legacy /api/bkafi/load task also writes detailed_results JSON; keep
-        # it in sync so anything else reading that file finds fresh data.
         detailed = {cands_basename: bkafi_flat}
         legacy_detailed_path = RESULTS_DIR / 'demo_inference' / 'demo_detailed_results_XGBClassifier_seed1.json'
         with open(legacy_detailed_path, 'w', encoding='utf-8') as f:
             json.dump(detailed, f, default=_json_default)
+        touched_redis = True
+
+    elif blocking_path.exists() and target_stage == 'blocking':
+        # Step 2 should colour cands yellow ("has_pairs") even though we
+        # don't have classifier scores yet. Populate bkafi:flat with stubs
+        # whose predicted_label/confidence are 0; the classify stage will
+        # later overwrite this with real scores.
+        pair_list = joblib.load(blocking_path)
+        bkafi_flat = _pairs_only_to_bkafi_flat(pair_list)
+        _cache_set_json('bkafi:flat', bkafi_flat)
+        _cache_set_json('bkafi:by_file', {cands_basename: bkafi_flat})
+        touched_redis = True
+
+    # Bump the cross-process invalidation stamp so the gunicorn workers (which
+    # live in a different process from this Celery worker and so can't be
+    # signaled directly) drop their in-memory `_buildings_status_cache` on the
+    # next request.
+    if touched_redis:
+        _cache_set_json('buildings_status:stamp', time.time())
 
 
 def _transpose_property_dict(property_dict: dict) -> dict:
@@ -317,6 +342,30 @@ def _scored_to_bkafi_flat(scored_pairs) -> dict:
         })
     for cand_key in by_cand:
         by_cand[cand_key]['possible_matches'].sort(key=lambda m: -m['confidence'])
+    return by_cand
+
+
+def _pairs_only_to_bkafi_flat(pair_list) -> dict:
+    """List of (cand_id, index_id) → {cand_id: {possible_matches: [...]}}.
+
+    Used at the blocking stage, before the classifier has run: every entry
+    gets confidence=0 and predicted_label=0 so /api/buildings/status will
+    set has_pairs=True and match_status=no_match for every cand."""
+    by_cand = {}
+    for entry in pair_list:
+        # blocking_pairs.joblib stores either 2-tuples or 3-tuples; accept both.
+        if len(entry) >= 2:
+            cid, iid = entry[0], entry[1]
+        else:
+            continue
+        cand_key = str(cid)
+        obj = by_cand.setdefault(cand_key, {'possible_matches': []})
+        obj['possible_matches'].append({
+            'index_id': str(iid),
+            'confidence': 0.0,
+            'predicted_label': 0,
+            'true_label': 1 if str(cid) == str(iid) else 0,
+        })
     return by_cand
 
 

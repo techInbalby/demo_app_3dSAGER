@@ -49,13 +49,30 @@
 
   async function _applyColors() {
     const candLayer = _findCandLayer();
-    if (!candLayer) {
+    if (!candLayer || !window.viewer) {
       console.warn('[AlignmentStep] No visible Source A layer to recolor.');
       return;
     }
-    const colors = await _fetchJson('/api/alignment/buildings/colors?stage=4d');
-    if (window.viewer && typeof window.viewer.updateBuildingColors === 'function') {
-      await window.viewer.updateBuildingColors(colors.cand_colors || {}, candLayer);
+    const resp = await _fetchJson('/api/alignment/buildings/colors?stage=4d');
+    const byNumeric = resp.cand_colors || {};
+
+    // The backend keys colors by raw numeric BAG id (e.g. "0518100000203425")
+    // because matches_by_cand.json comes from scored_pairs.joblib. The viewer's
+    // entities are keyed by the CityJSON 1.1 object id which is BAG-prefixed
+    // (e.g. "NL.IMBAG.Pand.0518100000203425-0"). Re-key the colors map by the
+    // exact viewer buildingId so updateBuildingColors's direct lookup hits.
+    const remapped = {};
+    if (window.viewer.buildingEntities) {
+      window.viewer.buildingEntities.forEach((_entities, viewerBuildingId) => {
+        const m = String(viewerBuildingId).match(/(\d{10,})/);
+        const numeric = m ? m[1] : String(viewerBuildingId);
+        const color = byNumeric[numeric];
+        if (color) remapped[viewerBuildingId] = color;
+      });
+    }
+
+    if (typeof window.viewer.updateBuildingColors === 'function') {
+      await window.viewer.updateBuildingColors(remapped, candLayer);
     }
   }
 
