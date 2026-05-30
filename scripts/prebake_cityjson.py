@@ -54,6 +54,18 @@ except ImportError:
 # Configuration
 # ---------------------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("DATA_DIR", "/app/data"))
+
+# Extra roots scanned in addition to DATA_DIR. Defaults to the demo's per-input-
+# hash cache directory so freshly-aligned CityJSON files get pre-baked next to
+# their source files without a separate run. Override via EXTRA_PREBAKE_DIRS
+# (comma-separated list of paths).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_EXTRA = str(_REPO_ROOT / "results_demo" / "cache")
+EXTRA_DIRS = [
+    Path(p.strip()) for p in os.environ.get("EXTRA_PREBAKE_DIRS", _DEFAULT_EXTRA).split(",")
+    if p.strip()
+]
+
 # Horizontal CRS used by The Hague data (EPSG:7415 is a compound CRS whose
 # horizontal part is RD New = EPSG:28992).
 DEFAULT_SOURCE_CRS = "EPSG:28992"
@@ -255,29 +267,48 @@ def prebake_file(json_path: Path) -> bool:
 
 
 def main():
-    if not DATA_DIR.exists():
-        print(f"DATA_DIR does not exist: {DATA_DIR}")
+    # Build the list of roots to walk: DATA_DIR plus any EXTRA_DIRS that exist.
+    roots = []
+    if DATA_DIR.exists():
+        roots.append(DATA_DIR)
+    else:
+        print(f"DATA_DIR does not exist (skipping): {DATA_DIR}")
+    for extra in EXTRA_DIRS:
+        if extra.exists():
+            roots.append(extra)
+        else:
+            print(f"EXTRA_DIR not present (skipping): {extra}")
+
+    if not roots:
+        print("No directories to scan. Exiting.")
         sys.exit(1)
 
-    print(f"Pre-baking CityJSON files in: {DATA_DIR}")
-    json_files = sorted(DATA_DIR.rglob("*.json"))
-
-    # Exclude files that are already pre-baked stubs
-    candidates = [p for p in json_files if not p.name.endswith(".prebaked.json")]
-    print(f"Found {len(candidates)} JSON files to process\n")
+    print("Pre-baking CityJSON files under:")
+    for r in roots:
+        print(f"  - {r}")
+    print()
 
     t0 = time.time()
     ok = fail = skipped = 0
 
-    for p in candidates:
-        print(f"Processing: {p.relative_to(DATA_DIR)}")
-        result = prebake_file(p)
-        if result is True:
-            ok += 1
-        elif result is False:
-            fail += 1
-        else:
-            skipped += 1
+    for root in roots:
+        json_files = sorted(root.rglob("*.json"))
+        candidates = [p for p in json_files if not p.name.endswith(".prebaked.json")]
+        if not candidates:
+            continue
+        for p in candidates:
+            try:
+                rel = p.relative_to(root)
+            except ValueError:
+                rel = p
+            print(f"Processing: {root.name}/{rel}")
+            result = prebake_file(p)
+            if result is True:
+                ok += 1
+            elif result is False:
+                fail += 1
+            else:
+                skipped += 1
 
     elapsed = time.time() - t0
     print(f"\nDone in {elapsed:.1f}s — {ok} succeeded, {fail} failed, {skipped} skipped")
