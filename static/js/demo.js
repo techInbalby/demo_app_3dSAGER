@@ -1662,6 +1662,13 @@ function updateViewerLegend() {
             <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(244,67,54);"></span>False positive</div>
             <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(97,97,97);"></span>No match</div>`;
         }
+        if (anyALoaded && ps.step4Completed) {
+            html += `<div class="viewer-legend-group" style="margin-top:6px;">Spatial alignment</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(220,110,60);"></span>Misaligned candidate (4a)</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(170,90,230);"></span>Anchor (candidate side) (4b)</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(0,200,230);"></span>Anchor (index side) (4b)</div>
+            <div class="viewer-legend-row"><span class="viewer-legend-swatch" style="background:rgb(120,80,140);"></span>False negative (4d)</div>`;
+        }
         const loadedCount = allA.filter(f => layerState[f.path]?.visible).length
                           + allB.filter(f => layerState[f.path]?.visible).length;
         if (loadedCount > 1) {
@@ -3725,6 +3732,19 @@ function updatePipelineUI() {
         } else {
             if (step3Status) { step3Status.innerHTML = ''; step3Status.className = 'step-status'; }
             if (step3SummaryBtn) step3SummaryBtn.style.display = 'none';
+        }
+    }
+
+    // Step 4: green when completed.
+    const step4El = document.getElementById('step-4');
+    const step4Status = step4El ? step4El.querySelector('.step-status') : null;
+    if (step4El) {
+        step4El.classList.remove('step-completed');
+        if (pipelineState.step4Completed) {
+            step4El.classList.add('step-completed');
+            if (step4Status) { step4Status.innerHTML = '✓'; step4Status.className = 'step-status completed'; }
+        } else if (step4Status) {
+            step4Status.innerHTML = ''; step4Status.className = 'step-status';
         }
     }
 }
