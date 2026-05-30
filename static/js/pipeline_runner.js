@@ -122,9 +122,24 @@
     _scheduleNextPoll(stage);
   }
 
+  function _clearListeners(stage) {
+    delete listeners.progress[stage];
+    delete listeners.complete[stage];
+    delete listeners.error[stage];
+  }
+
   async function start(stage, opts) {
     if (active[stage]) {
       throw new Error(`stage '${stage}' is already running`);
+    }
+    // Reset listeners for this stage so consecutive clicks don't pile up duplicates.
+    // Then register opts.{onProgress,onComplete,onError} if supplied — these are
+    // the most common usage pattern (one-shot per click).
+    _clearListeners(stage);
+    if (opts && typeof opts === 'object') {
+      if (typeof opts.onProgress === 'function') _registerListener('progress', stage, opts.onProgress);
+      if (typeof opts.onComplete === 'function') _registerListener('complete', stage, opts.onComplete);
+      if (typeof opts.onError    === 'function') _registerListener('error',    stage, opts.onError);
     }
     const startPayload = await _postStart(stage);
     active[stage] = {
@@ -169,6 +184,7 @@
     cancel,
     getActive,
     getManifest,
+    clearListeners: _clearListeners,
     onProgress: (stage, cb) => _registerListener('progress', stage, cb),
     onComplete: (stage, cb) => _registerListener('complete', stage, cb),
     onError:    (stage, cb) => _registerListener('error',    stage, cb),

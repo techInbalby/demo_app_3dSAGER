@@ -220,6 +220,156 @@ def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
                     # Don't fail the whole run if prebake fails — viewer can fall back to raw.
                     print(f"[pipeline_run] prebake of {p.name} failed: {e}")
 
+    # Bridge new-pipeline outputs to the legacy demo's Redis + JSON consumers
+    # so the existing /api/building/*, /api/buildings/status,
+    # /api/classifier/summary routes keep working unchanged.
+    progress_cb(target_stage, 'bridging to legacy demo routes')
+    try:
+        _bridge_to_legacy(cache_dir, cands_path, target_stage)
+    except Exception as e:
+        print(f"[pipeline_run] legacy bridging failed (non-fatal): {e}")
+
     summary['input_hash'] = input_hash
     summary['elapsed_s'] = round(time.time() - started_at, 1)
     return summary
+
+
+# ---------------------------------------------------------------------------- #
+# Legacy bridging — translate cache_dir outputs into the Redis keys + JSON     #
+# files the existing /api/* routes expect.                                      #
+# ---------------------------------------------------------------------------- #
+
+_LEGACY_THRESHOLD = 0.5   # matches CONFIDENCE_THRESHOLD in app.py
+
+
+def _bridge_to_legacy(cache_dir: Path, cands_path: str, target_stage: str) -> None:
+    cands_basename = Path(cands_path).name
+
+    # The frontend may pass either the basename or the relative path under
+    # data/ for a given file. Mirror both so legacy lookups hit.
+    keys = [
+        cands_basename,
+        f"RawCitiesData/The Hague/Source A/{cands_basename}",
+    ]
+
+    prop_path = cache_dir / "property_dict.joblib"
+    if prop_path.exists():
+        property_dict = joblib.load(prop_path)
+        building_features = _transpose_property_dict(property_dict)
+        ids = list(building_features.keys())
+        for k in keys:
+            _cache_set_json(f'features:{k}', building_features)
+            _cache_set_json(f'features_ids:{k}', ids)
+
+    scored_path = cache_dir / "scored_pairs.joblib"
+    if scored_path.exists() and target_stage in ('classify', 'align'):
+        scored_pairs = joblib.load(scored_path)
+        bkafi_flat = _scored_to_bkafi_flat(scored_pairs)
+        _cache_set_json('bkafi:flat', bkafi_flat)
+        _cache_set_json('bkafi:by_file', {cands_basename: bkafi_flat})
+
+        metrics_payload = _compute_legacy_metrics(scored_pairs, cands_basename)
+        legacy_metrics_path = RESULTS_DIR / 'demo_inference' / 'demo_metrics_summary_seed1.json'
+        legacy_metrics_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(legacy_metrics_path, 'w', encoding='utf-8') as f:
+            json.dump(metrics_payload, f, indent=2, default=_json_default)
+
+        # The legacy /api/bkafi/load task also writes detailed_results JSON; keep
+        # it in sync so anything else reading that file finds fresh data.
+        detailed = {cands_basename: bkafi_flat}
+        legacy_detailed_path = RESULTS_DIR / 'demo_inference' / 'demo_detailed_results_XGBClassifier_seed1.json'
+        with open(legacy_detailed_path, 'w', encoding='utf-8') as f:
+            json.dump(detailed, f, default=_json_default)
+
+
+def _transpose_property_dict(property_dict: dict) -> dict:
+    """{attr: {'cands': {bid: val}, 'index': {...}}} -> {bid: {attr: val}}."""
+    if not property_dict:
+        return {}
+    first_attr = next(iter(property_dict.values()))
+    cands_dict = first_attr.get('cands', {}) if isinstance(first_attr, dict) else {}
+    out = {str(bid): {} for bid in cands_dict.keys()}
+    for attr_name, sides in property_dict.items():
+        if not isinstance(sides, dict):
+            continue
+        for raw_bid, value in sides.get('cands', {}).items():
+            bid = str(raw_bid)
+            if isinstance(value, (np.integer, np.floating)):
+                value = float(value)
+            elif isinstance(value, np.ndarray):
+                value = value.tolist()
+            out.setdefault(bid, {})[attr_name] = value
+    return out
+
+
+def _scored_to_bkafi_flat(scored_pairs) -> dict:
+    """List of (cand_id, index_id, score) → {cand_id: {possible_matches: [...]}}."""
+    by_cand = {}
+    for cid, iid, score in scored_pairs:
+        cand_key = str(cid)
+        entry = by_cand.setdefault(cand_key, {'possible_matches': []})
+        score_f = float(score)
+        entry['possible_matches'].append({
+            'index_id': str(iid),
+            'confidence': score_f,
+            'predicted_label': 1 if score_f >= _LEGACY_THRESHOLD else 0,
+            'true_label': 1 if str(cid) == str(iid) else 0,
+        })
+    for cand_key in by_cand:
+        by_cand[cand_key]['possible_matches'].sort(key=lambda m: -m['confidence'])
+    return by_cand
+
+
+def _compute_legacy_metrics(scored_pairs, cands_basename: str) -> dict:
+    tp = fp = fn = 0
+    cand_set = set()
+    pos_pairs = 0
+    for cid, iid, score in scored_pairs:
+        cand_set.add(str(cid))
+        same = str(cid) == str(iid)
+        if same:
+            pos_pairs += 1
+        predicted = float(score) >= _LEGACY_THRESHOLD
+        if predicted and same:
+            tp += 1
+        elif predicted and not same:
+            fp += 1
+        elif not predicted and same:
+            fn += 1
+    precision = tp / max(tp + fp, 1)
+    recall = tp / max(tp + fn, 1)
+    f1 = (2 * precision * recall) / max(precision + recall, 1e-9)
+    per_file = {
+        'candidates_in_file': len(cand_set),
+        'potential_matches_in_index': pos_pairs,
+        'potential_matches_in_blocking': pos_pairs,
+        'threshold_precision': round(precision, 4),
+        'threshold_recall_overall': round(recall, 4),
+        'threshold_recall_blocking': round(recall, 4),
+        'threshold_recall_matching': round(recall, 4),
+        'threshold_f1_score': round(f1, 4),
+        'threshold_true_positives': tp,
+        'threshold_false_positives': fp,
+        'threshold_false_negatives': fn,
+        'threshold_total_false_negatives': fn,
+        'threshold_false_negatives_in_blocking': fn,
+        'threshold_false_negatives_not_in_blocking': 0,
+        'best_match_precision': round(precision, 4),
+        'best_match_recall_overall': round(recall, 4),
+        'best_match_recall_blocking': round(recall, 4),
+        'best_match_recall_matching': round(recall, 4),
+        'best_match_f1_score': round(f1, 4),
+        'best_match_true_positives': tp,
+        'best_match_false_positives': fp,
+        'best_match_false_negatives': fn,
+        'best_match_total_false_negatives': fn,
+        'best_match_false_negatives_in_blocking': fn,
+        'best_match_false_negatives_not_in_blocking': 0,
+    }
+    return {
+        'XGBClassifier': {
+            'model_name': 'XGBClassifier',
+            **per_file,
+            'file_metrics': {cands_basename: per_file},
+        }
+    }

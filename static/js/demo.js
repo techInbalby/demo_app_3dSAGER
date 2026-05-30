@@ -2250,34 +2250,16 @@ function calculateGeometricFeatures() {
         }
     };
     
-    // Call API to calculate features for all buildings
-    fetch('/api/features/calculate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_path: selectedFile })
-    })
-        .then(response => response.json().then(data => ({ status: response.status, data })))
-        .then(({ status, data }) => {
-            if (data.error) {
-                handleFeatureError(data.error);
-                return;
-            }
-
-            if (status === 202 && data.job_id) {
-                showLoading('Calculating geometric features (queued)...');
-                pollJobStatus(
-                    data.job_id,
-                    () => handleFeatureSuccess('Features calculated'),
-                    handleFeatureError
-                );
-                return;
-            }
-
-            handleFeatureSuccess(data.message || 'Features calculated');
-        })
-        .catch(error => {
-            handleFeatureError(error.message);
-        });
+    // Run pipeline stages up to 'features' (preprocess + properties) live in
+    // the Celery worker. PipelineRunner handles the polling.
+    window.PipelineRunner.start('features', {
+        onProgress: ({ sub_stage, message, elapsed_s }) => {
+            const label = sub_stage ? `[${sub_stage}] ${message || ''}` : (message || 'Running…');
+            showLoading(`${label} (${elapsed_s || 0}s)`);
+        },
+        onComplete: ({ result }) => handleFeatureSuccess(result && result.cache_dir ? 'Features calculated' : 'Features calculated'),
+        onError:    ({ error })  => handleFeatureError(error),
+    }).catch(err => handleFeatureError(err.message));
 }
 
 // Load features for a specific building
@@ -2499,33 +2481,15 @@ function runBKAFI() {
         stepBtn.disabled = false;
     };
     
-    // Call API to load BKAFI results from pkl file
-    fetch('/api/bkafi/load', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-    })
-        .then(response => response.json().then(data => ({ status: response.status, data })))
-        .then(({ status, data }) => {
-            if (data.error) {
-                handleBkafiError(data.error);
-                return;
-            }
-
-            if (status === 202 && data.job_id) {
-                showLoading('Loading BKAFI results (queued)...');
-                pollJobStatus(
-                    data.job_id,
-                    () => handleBkafiSuccess('BKAFI results loaded'),
-                    handleBkafiError
-                );
-                return;
-            }
-
-            handleBkafiSuccess(data.message || 'BKAFI results loaded');
-        })
-        .catch(error => {
-            handleBkafiError(error.message);
-        });
+    // Run the BKAFI blocking stage live (cache HIT if it already ran).
+    window.PipelineRunner.start('blocking', {
+        onProgress: ({ sub_stage, message, elapsed_s }) => {
+            const label = sub_stage ? `[${sub_stage}] ${message || ''}` : (message || 'Running…');
+            showLoading(`${label} (${elapsed_s || 0}s)`);
+        },
+        onComplete: () => handleBkafiSuccess('BKAFI results loaded'),
+        onError:    ({ error }) => handleBkafiError(error),
+    }).catch(err => handleBkafiError(err.message));
 }
 
 // Load BKAFI pairs for a specific building
@@ -3647,55 +3611,64 @@ function viewResults() {
         return;
     }
 
-    Promise.all(
-        targetFiles.map((filePath) =>
-            fetch(`/api/classifier/summary?file=${encodeURIComponent(filePath)}`)
-                .then(response => response.json())
-                .then(data => {
-                    if (data.error) {
-                        throw new Error(data.error);
-                    }
-                    return { filePath, data };
-                })
+    const handleClassifierComplete = () => {
+        // After the live pipeline finishes the matching stage, fetch per-file
+        // summaries the same way the legacy code did. The Celery task has
+        // populated the metrics file in results_demo/demo_inference/.
+        Promise.all(
+            targetFiles.map((filePath) =>
+                fetch(`/api/classifier/summary?file=${encodeURIComponent(filePath)}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.error) throw new Error(data.error);
+                        return { filePath, data };
+                    })
+            )
         )
-    )
-        .then(results => {
-            // Update loading message
-            showLoading('Updating building colors...');
-            
-            // Mark step 3 as completed
-            pipelineState.step3Completed = true;
-            updatePipelineUI();
-            updateViewerLegend();
-            // Advance tutorial only after the UI is ready (colors updating)
-            advanceTutorialForPipelineAction('viewResults');
-            
-            // Show summary button after Matching Classifier is completed
-            const summaryBtn = document.getElementById('step-btn-3-summary');
-            if (summaryBtn) {
-                summaryBtn.style.display = 'block';
-            }
-            
-            // Update building colors based on match status (use cached data if available)
-            updateBuildingColorsForStage3(true, () => {
+            .then(results => {
+                showLoading('Updating building colors...');
+                pipelineState.step3Completed = true;
+                updatePipelineUI();
+                updateViewerLegend();
+                advanceTutorialForPipelineAction('viewResults');
+                const summaryBtn = document.getElementById('step-btn-3-summary');
+                if (summaryBtn) summaryBtn.style.display = 'block';
+
+                updateBuildingColorsForStage3(true, () => {
+                    hideLoading();
+                    const tutorialGuide = document.getElementById('tutorial-guide');
+                    if (!tutorialGuide || tutorialGuide.style.display === 'none') {
+                        showClassifierResultsSummary(results);
+                    }
+                });
+                stepBtn.textContent = 'Completed';
+                stepBtn.style.background = '#28a745';
+            })
+            .catch(error => {
+                console.error('Error loading summary:', error);
                 hideLoading();
-                
-                const tutorialGuide = document.getElementById('tutorial-guide');
-                if (!tutorialGuide || tutorialGuide.style.display === 'none') {
-                    showClassifierResultsSummary(results);
-                }
+                alert('Error loading classifier results summary: ' + error.message);
+                stepBtn.textContent = 'Run Classifier';
+                stepBtn.disabled = false;
             });
-            
-            stepBtn.textContent = 'Completed';
-            stepBtn.style.background = '#28a745';
-        })
-        .catch(error => {
-            console.error('Error loading summary:', error);
-            hideLoading();
-            alert('Error loading classifier results summary: ' + error.message);
-            stepBtn.textContent = 'Run Classifier';
-            stepBtn.disabled = false;
-        });
+    };
+
+    const handleClassifierError = (errorMessage) => {
+        console.error('Classifier pipeline error:', errorMessage);
+        hideLoading();
+        alert('Error running classifier: ' + errorMessage);
+        stepBtn.textContent = 'Run Classifier';
+        stepBtn.disabled = false;
+    };
+
+    window.PipelineRunner.start('matching', {
+        onProgress: ({ sub_stage, message, elapsed_s }) => {
+            const label = sub_stage ? `[${sub_stage}] ${message || ''}` : (message || 'Running…');
+            showLoading(`${label} (${elapsed_s || 0}s)`);
+        },
+        onComplete: handleClassifierComplete,
+        onError:    ({ error }) => handleClassifierError(error),
+    }).catch(err => handleClassifierError(err.message));
 }
 
 // Update pipeline UI with status indicators and step accent colors (orange = step 1, yellow = step 2 when relevant)
