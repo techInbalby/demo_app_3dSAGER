@@ -4304,8 +4304,14 @@ window.viewMatch = viewMatch;
 window.showBuildingProperties = showBuildingProperties;
 window.closeBuildingProperties = closeBuildingProperties;
 window.updateViewerLegend = updateViewerLegend;
+window.updatePipelineUI    = updatePipelineUI;
 window.setActiveFileFromViewer = setActiveFileFromViewer;
 window.zoomToLayer = zoomToLayer;
+// pipelineState is declared with `let` at the top of this file, which under
+// strict module-script semantics does NOT auto-attach to window. alignment.js
+// (separate <script>) needs to mutate `step4Completed` to drive the legend
+// and the post-run colour-reapply chain — expose the actual object.
+window.pipelineState = pipelineState;
 
 // Called by the viewer after all queued layers have finished loading
 window.applyViewerLayerStyles = function () {
