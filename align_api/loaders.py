@@ -62,6 +62,26 @@ def metrics_summary(cache_dir: Optional[Path] = None) -> Optional[dict]:
     return _read_json_cached(cache_dir / 'metrics_summary.json')
 
 
+def bkafi_pool_for_cand(cand_id) -> list:
+    """Return the cand's BKAFI blocking pool from the Redis-backed bkafi:flat
+    dict (populated by tasks.py:_bridge_to_legacy). Each entry has at least
+    {index_id, confidence, predicted_label, true_label}. Empty list if Redis
+    isn't reachable or the cand isn't in the pool."""
+    try:
+        # Lazy import so this module stays importable in environments without
+        # the full Flask app (e.g. CI smoke tests of pipeline_stages alone).
+        from app import cache_get_json
+    except Exception:
+        return []
+    flat = cache_get_json('bkafi:flat')
+    if not flat or not isinstance(flat, dict):
+        return []
+    entry = flat.get(str(cand_id))
+    if not entry:
+        return []
+    return list(entry.get('possible_matches', []))
+
+
 def cityjson_path(stage: str, seed: int = 1,
                   cache_dir: Optional[Path] = None) -> Optional[Path]:
     """

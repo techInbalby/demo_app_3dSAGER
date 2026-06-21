@@ -1496,6 +1496,10 @@ function showBuildingProperties(buildingId, cityObject, options) {
             if (bkafiLoaded) {
                 loadBuildingBkafiPairs(buildingId);
             }
+            // After Step 4: show the spatial-alignment callout for this cand.
+            if (pipelineState && pipelineState.step4Completed) {
+                loadBuildingAlignmentInfo(buildingId);
+            }
         } else {
             // Features not calculated yet
             calcBtn.disabled = false;
@@ -1526,8 +1530,111 @@ function showBuildingProperties(buildingId, cityObject, options) {
     overlay.classList.add('active');
 }
 
+// ── Spatial-alignment callout for the building-properties panel ────────────
+// Populates #building-alignment-callout from /api/alignment/cand/<id>. Four
+// outcome variants (green/red/purple/grey) + a "not in blocking pool" chip.
+// Also decorates the BKAFI pairs list with a ⭐ on whichever row matches the
+// NN-selected index_id.
+window._lastAlignmentInfo = null;
+
+function loadBuildingAlignmentInfo(buildingId) {
+    const wrap = document.getElementById('building-alignment-callout');
+    if (!wrap) return;
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    window._lastAlignmentInfo = null;
+
+    // Strip bag_/NL.IMBAG.Pand. prefixes so we hit the numeric ID the backend
+    // keys on. Same trick the existing extractNumericId helper uses.
+    const m = String(buildingId).match(/(\d{10,})/);
+    const numericId = m ? m[1] : String(buildingId);
+
+    fetch(`/api/alignment/cand/${encodeURIComponent(numericId)}`)
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(payload => {
+            window._lastAlignmentInfo = payload;
+            renderBuildingAlignmentCallout(payload);
+            decorateBkafiListWithNN(payload);
+        })
+        .catch(err => {
+            // 404 = pipeline ran but this cand isn't in matches_by_cand (e.g.
+            // it's an index-only building or a pre-baked extra). Stay quiet.
+            console.debug('alignment/cand fetch:', err);
+        });
+}
+
+function renderBuildingAlignmentCallout(payload) {
+    const wrap = document.getElementById('building-alignment-callout');
+    if (!wrap || !payload || !payload.nn_match) return;
+    const nn       = payload.nn_match;
+    const d        = nn.distance_m;
+    const dTxt     = (d == null || Number.isNaN(d)) ? 'n/a' : `${Number(d).toFixed(2)} m`;
+    const cutoff   = payload.cutoff_m || 7.0;
+    const inPool   = !!payload.in_blocking_pool;
+    const pred     = Number(nn.predicted_label) === 1;
+    const trueLbl  = Number(nn.true_label) === 1;
+    let variant, title, body;
+    if (pred && trueLbl) {
+        variant = 'green';
+        title   = 'Confirmed match (true positive)';
+        body    = `1-NN landed on the correct same-ID building <code>${nn.index_id}</code> at <strong>${dTxt}</strong>.`;
+    } else if (pred && !trueLbl) {
+        variant = 'red';
+        title   = 'Predicted match — ground truth disagrees (false positive)';
+        body    = `1-NN picked <code>${nn.index_id}</code> at <strong>${dTxt}</strong>, but the true counterpart is a different building.`;
+    } else if (!pred && trueLbl) {
+        variant = 'purple';
+        title   = 'False negative — rejected by distance cutoff';
+        body    = `1-NN found the correct same-ID building <code>${nn.index_id}</code>, but at <strong>${dTxt}</strong> — exceeding the <strong>${cutoff} m</strong> cutoff. The spatial step rejected the match (final_score went negative).`;
+    } else {
+        variant = 'grey';
+        title   = 'No match';
+        body    = `1-NN landed on <code>${nn.index_id}</code> at <strong>${dTxt}</strong>. This candidate has no same-ID counterpart in the index dataset.`;
+    }
+    const poolChip = inPool
+        ? `<span class="nn-pool-chip nn-pool-yes" title="The 1-NN's index_id was also in the BKAFI blocking pool">in blocking pool</span>`
+        : `<span class="nn-pool-chip nn-pool-no" title="The 1-NN's index_id was NOT in the BKAFI blocking pool — only the spatial step surfaced it">not in blocking pool</span>`;
+    wrap.style.display = 'block';
+    wrap.innerHTML = `
+        <div class="nn-callout nn-callout-${variant}">
+            <div class="nn-callout-title">${title} ${poolChip}</div>
+            <div class="nn-callout-body">${body}</div>
+        </div>`;
+}
+
+function decorateBkafiListWithNN(payload) {
+    if (!payload || !payload.nn_match) return;
+    const nnId = String(payload.nn_match.index_id);
+    // The BKAFI list renders later (loadBuildingBkafiPairs fetches async).
+    // Re-decorate a few times to land after the DOM appears.
+    let attempts = 0;
+    const tryDecorate = () => {
+        const rows = document.querySelectorAll('#properties-list .bkafi-pair-row, #properties-list [data-index-id]');
+        if (!rows.length && attempts++ < 6) {
+            setTimeout(tryDecorate, 200);
+            return;
+        }
+        rows.forEach(row => {
+            const rowId = row.getAttribute('data-index-id') || row.dataset.indexId;
+            if (rowId && String(rowId) === nnId) {
+                if (!row.querySelector('.nn-star')) {
+                    const star = document.createElement('span');
+                    star.className = 'nn-star';
+                    star.title = 'Selected by the spatial 1-NN step (Step 4)';
+                    star.textContent = ' ⭐';
+                    row.appendChild(star);
+                }
+            }
+        });
+    };
+    tryDecorate();
+}
+
 // Close building properties window
 function closeBuildingProperties() {
+    const wrap = document.getElementById('building-alignment-callout');
+    if (wrap) { wrap.style.display = 'none'; wrap.innerHTML = ''; }
+    window._lastAlignmentInfo = null;
     const propsWindow = document.getElementById('building-properties-window');
     const overlay = document.getElementById('properties-overlay');
     
@@ -1959,11 +2066,46 @@ function showBkafiPairs(pairs, buildingId = null) {
     viewButton.style.marginTop = '15px';
     viewButton.style.width = '100%';
     viewButton.textContent = 'View Pairs Visually';
-    viewButton.onclick = () => {
-        // Get the building ID and pairs from the container's data attributes
+    viewButton.onclick = async () => {
         const containerBuildingId = bkafiContainer.getAttribute('data-building-id');
-        const containerPairs = JSON.parse(bkafiContainer.getAttribute('data-pairs'));
-        console.log('View button clicked for building:', containerBuildingId, 'with', containerPairs.length, 'pairs');
+        let containerPairs = JSON.parse(bkafiContainer.getAttribute('data-pairs'));
+        // After Step 4, inject the spatial-NN match if it isn't already in the
+        // top BKAFI pairs the carousel shows. Tag with _nnInjected so the
+        // carousel render can decorate the slide.
+        if (window.pipelineState && window.pipelineState.step4Completed) {
+            try {
+                const m = String(containerBuildingId).match(/(\d{10,})/);
+                const numericId = m ? m[1] : String(containerBuildingId);
+                const r = await fetch(`/api/alignment/cand/${encodeURIComponent(numericId)}`);
+                if (r.ok) {
+                    const info = await r.json();
+                    window._lastAlignmentInfo = info;
+                    const nnId = String(info.nn_match.index_id);
+                    // The carousel slices to the first 3 entries — make sure
+                    // the NN is in that window. If it's there already, mark it;
+                    // otherwise prepend it as a new entry.
+                    const existingIdx = containerPairs.findIndex(p => String(p.index_id) === nnId);
+                    if (existingIdx === -1) {
+                        containerPairs = [{
+                            index_id:        info.nn_match.index_id,
+                            confidence:      info.nn_match.final_score,
+                            predicted_label: info.nn_match.predicted_label,
+                            true_label:      info.nn_match.true_label,
+                            distance_m:      info.nn_match.distance_m,
+                            _nnInjected:     true,
+                            _nnInPool:       false,
+                        }, ...containerPairs];
+                    } else {
+                        containerPairs[existingIdx] = {
+                            ...containerPairs[existingIdx],
+                            _nnInjected: true,
+                            _nnInPool:   true,
+                            distance_m:  info.nn_match.distance_m,
+                        };
+                    }
+                }
+            } catch (e) { console.debug('NN injection failed:', e); }
+        }
         openBkafiComparisonWindow(containerBuildingId, containerPairs);
     };
     bkafiContainer.appendChild(viewButton);
@@ -2254,8 +2396,16 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         counter.textContent = `Option ${currentIdx + 1} / ${n}`;
         prevBtn.disabled = false;
         nextBtn.disabled = false;
-        pairIdEl.textContent = pairsToShow[currentIdx]
-            ? `Index: ${pairsToShow[currentIdx].index_id}` : '';
+        const currentPair = pairsToShow[currentIdx];
+        if (currentPair && currentPair._nnInjected) {
+            const chip = currentPair._nnInPool
+                ? '<span class="nn-pool-chip nn-pool-yes" style="margin-left:6px">also in blocking pool</span>'
+                : '<span class="nn-pool-chip nn-pool-no" style="margin-left:6px">not in blocking pool</span>';
+            const dTxt = (currentPair.distance_m != null) ? ` · d=${Number(currentPair.distance_m).toFixed(2)} m` : '';
+            pairIdEl.innerHTML = `⭐ Spatial NN match — Index: ${currentPair.index_id}${dTxt} ${chip}`;
+        } else {
+            pairIdEl.textContent = currentPair ? `Index: ${currentPair.index_id}` : '';
+        }
         // dots
         dots.forEach((d, i) => {
             d.classList.toggle('active', i === currentIdx);

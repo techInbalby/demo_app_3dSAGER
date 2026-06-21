@@ -37,7 +37,7 @@ from process_pairs import PairProcessor
 from alignment import RigidAligner, write_cands_cityjson
 
 
-CONFIG_VERSION = "v1"   # bump to invalidate all caches
+CONFIG_VERSION = "v2"   # bump to invalidate all caches
 STAGE_ORDER = ['preprocess', 'properties', 'blocking', 'classify', 'align']
 DEFAULT_SEED = 1
 # The reference run from the source repo uses 0.65 as the predicted_match
@@ -373,10 +373,11 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     # by querying the full index spatially after RANSAC instead of relying on
     # BKAFI's geometric-feature shortlist.
     n_gt_override = None
+    distance_by_pair = None
     if post_align_blocking and aligner.alignment_succeeded:
         if progress_cb: progress_cb('align', 'post-alignment KNN re-blocking')
         cutoff_m = float(config.Alignment.post_align_knn_cutoff)
-        scored_pairs, rescored_pairs = post_align_knn_block(
+        scored_pairs, rescored_pairs, distance_by_pair = post_align_knn_block(
             object_dict, aligner, pre_alignment_cand_centroids, cutoff_m=cutoff_m,
         )
         # Fair denominator for metrics: every cand whose true counterpart exists
@@ -407,7 +408,8 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     # --- 4. matches.csv + matches.parquet + matches_by_cand.json + metrics ---
     if progress_cb: progress_cb('align', 'saving matches and metrics')
     df, metrics = _build_matches_tables(scored_pairs, rescored_pairs, match_threshold,
-                                        n_gt_override=n_gt_override)
+                                        n_gt_override=n_gt_override,
+                                        distance_by_pair=distance_by_pair)
     df.to_csv(Path(cache_dir) / "matches.csv", index=False)
     try:
         df.to_parquet(Path(cache_dir) / "matches.parquet", index=False)
@@ -517,6 +519,7 @@ def post_align_knn_block(object_dict, aligner, pre_alignment_cand_centroids, cut
     tree = KDTree(idx_pts)
 
     new_scored, new_rescored = [], []
+    distance_by_pair = {}                 # (cid, iid) → raw d in metres
     within_cutoff = 0
     for cid, qc in pre_alignment_cand_centroids.items():
         aligned = aligner.R @ qc + aligner.t
@@ -530,11 +533,12 @@ def post_align_knn_block(object_dict, aligner, pre_alignment_cand_centroids, cut
         nearest_id = idx_ids[ii]
         new_scored.append((cid, nearest_id, float('nan')))
         new_rescored.append((cid, nearest_id, score))
+        distance_by_pair[(cid, nearest_id)] = d
         if d <= cutoff_m:
             within_cutoff += 1
     logger.info(f"[post_align_knn_block] {len(new_rescored)} cand→1-NN pairs, "
                 f"{within_cutoff}/{len(new_rescored)} within {cutoff_m:.1f} m cutoff")
-    return new_scored, new_rescored
+    return new_scored, new_rescored, distance_by_pair
 
 
 def _load_ground_truth(cache_dir: Path):
@@ -549,26 +553,34 @@ def _load_ground_truth(cache_dir: Path):
 
 
 def _build_matches_tables(scored_pairs, rescored_pairs, match_threshold,
-                          n_gt_override=None):
+                          n_gt_override=None, distance_by_pair=None):
     """
     n_gt_override: if provided, overrides the recall denominator. Default is the
     count of same-ID pairs in `scored_pairs` (in-pool population). With
     post-align-blocking, callers pass the count of shared BAG IDs (the full
     recoverable population) so recall is measured fairly against everything the
     alignment could in principle find.
+
+    distance_by_pair: optional {(cid, iid): d_metres}. Populated only by
+    post_align_knn_block; threaded through so the UI can show why a cand is FN
+    (e.g. "1-NN at 10.5 m, cutoff 7 m"). Hybrid mode leaves it None and the
+    distance_m column is NaN.
     """
     rescored_by_pair = {(c, i): s for c, i, s in rescored_pairs}
+    distance_by_pair = distance_by_pair or {}
     rows = []
     for cid, iid, geo_score in scored_pairs:
         final = rescored_by_pair.get((cid, iid), geo_score)
         # NaN-safe: in post-align-blocking mode geometric_score is NaN
         # because these pairs were never scored by the classifier.
         geo_out = round(geo_score, 4) if (geo_score == geo_score) else float('nan')
+        d = distance_by_pair.get((cid, iid))
         rows.append({
             'cand_id': cid,
             'index_id': iid,
             'geometric_score': geo_out,
             'final_score': round(final, 4),
+            'distance_m': round(d, 3) if d is not None else float('nan'),
             'predicted_match': int(final >= match_threshold),
             'same_id': int(cid == iid),
         })
@@ -600,10 +612,12 @@ def _build_matches_tables(scored_pairs, rescored_pairs, match_threshold,
 
 def _group_matches_by_cand(df: pd.DataFrame, cands_filename: str) -> dict:
     """Group rows by cand_id in the schema the demo's frontend expects."""
+    has_distance = 'distance_m' in df.columns
     grouped = {}
     for cand_id, sub in df.groupby('cand_id'):
-        grouped[str(cand_id)] = {'possible_matches': [
-            {
+        possible = []
+        for r in sub.itertuples(index=False):
+            entry = {
                 'index_id': str(r.index_id),
                 'geometric_score': float(r.geometric_score),
                 'final_score': float(r.final_score),
@@ -613,6 +627,10 @@ def _group_matches_by_cand(df: pd.DataFrame, cands_filename: str) -> dict:
                 # match-display code paths.
                 'confidence': float(r.final_score),
             }
-            for r in sub.itertuples(index=False)
-        ]}
+            if has_distance:
+                d = float(r.distance_m)
+                # Frontend hides this when null; NaN ⇒ omit cleanly.
+                entry['distance_m'] = d if d == d else None  # NaN-safe
+            possible.append(entry)
+        grouped[str(cand_id)] = {'possible_matches': possible}
     return {cands_filename: grouped}

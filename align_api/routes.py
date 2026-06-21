@@ -89,6 +89,53 @@ def alignment_cityjson():
                      as_attachment=False, conditional=True)
 
 
+@alignment_bp.route('/cand/<cand_id>', methods=['GET'])
+def alignment_cand(cand_id):
+    """Per-cand inspection payload: the spatial NN match plus whether it was
+    in the BKAFI blocking pool. Drives the building-properties "Spatial
+    alignment" callout and the comparison-window NN-slide decoration."""
+    (cache_info, err) = _ensure_aligned()
+    if err is not None:
+        return err
+    cache_dir, info = cache_info
+    mbc = loaders.matches_by_cand(cache_dir) or {}
+
+    # Find the cand entry (the file-keyed wrapper has one entry: the aligned
+    # candidates filename) and pick its best (first) match — possible_matches
+    # are sorted by final_score desc in stage_align.
+    cand_entry = None
+    for _file, by_id in mbc.items():
+        if str(cand_id) in by_id:
+            cand_entry = by_id[str(cand_id)]
+            break
+    if cand_entry is None:
+        return jsonify(error=f"cand {cand_id} not found in matches_by_cand"), 404
+    matches = cand_entry.get('possible_matches', [])
+    if not matches:
+        return jsonify(error=f"cand {cand_id} has no possible matches"), 404
+    nn = matches[0]
+
+    # Was the NN's index_id present in the original BKAFI pool? bkafi:flat
+    # is the bridged per-cand dict {cid: {possible_matches: [{index_id,…},…]}}.
+    pool = loaders.bkafi_pool_for_cand(cand_id)
+    in_pool = bool(pool) and any(str(p.get('index_id')) == str(nn.get('index_id')) for p in pool)
+
+    return jsonify({
+        'cand_id': str(cand_id),
+        'nn_match': {
+            'index_id':        nn.get('index_id'),
+            'distance_m':      nn.get('distance_m'),
+            'final_score':     nn.get('final_score'),
+            'predicted_label': nn.get('predicted_label'),
+            'true_label':      nn.get('true_label'),
+        },
+        'in_blocking_pool':    in_pool,
+        'alignment_succeeded': bool(info.get('alignment_succeeded')),
+        'match_threshold':     info.get('match_threshold'),
+        'cutoff_m':            7.0,   # config.Alignment.post_align_knn_cutoff (mirrored for UI labelling)
+    })
+
+
 @alignment_bp.route('/buildings/colors', methods=['GET'])
 def alignment_buildings_colors():
     stage = request.args.get('stage', '').lower()
