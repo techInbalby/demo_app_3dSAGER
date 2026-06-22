@@ -55,12 +55,30 @@ def pipeline_start():
     input_hash = pipeline_stages.compute_input_hash(cands_path, index_path)
     cache_dir = get_cache_dir(input_hash)
 
-    task = tasks.pipeline_run.delay(
-        target_stage=target_stage,
-        cands_path=cands_path,
-        index_path=index_path,
-        input_hash=input_hash,
-    )
+    # Optional user-tunable knobs. Per-stage cache-hit gates compare against
+    # the recorded values; mismatch → recompute that stage (and downstream
+    # outputs for blocking).
+    nn_count = body.get('nn_count')
+    cutoff_m = body.get('post_align_knn_cutoff')
+    try:
+        nn_count = int(nn_count) if nn_count is not None else None
+    except (TypeError, ValueError):
+        nn_count = None
+    try:
+        cutoff_m = float(cutoff_m) if cutoff_m is not None else None
+    except (TypeError, ValueError):
+        cutoff_m = None
+
+    task_kwargs = {
+        'target_stage': target_stage,
+        'cands_path': cands_path,
+        'index_path': index_path,
+        'input_hash': input_hash,
+    }
+    if nn_count is not None: task_kwargs['nn_count'] = nn_count
+    if cutoff_m is not None: task_kwargs['post_align_knn_cutoff'] = cutoff_m
+
+    task = tasks.pipeline_run.delay(**task_kwargs)
     return jsonify({
         'task_id': task.id,
         'ui_stage': ui_stage,

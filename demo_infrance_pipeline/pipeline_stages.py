@@ -211,12 +211,35 @@ def stage_properties(cache_dir: Path, progress_cb=None) -> dict:
     return property_dict
 
 
-def stage_blocking(cache_dir: Path, progress_cb=None) -> List[Tuple[str, str]]:
-    """Run BKAFI blocking. Writes blocking_pairs.joblib (list of (cand_id, index_id))."""
+def stage_blocking(cache_dir: Path, nn_count: int = None,
+                   progress_cb=None) -> List[Tuple[str, str]]:
+    """Run BKAFI blocking. Writes blocking_pairs.joblib (list of (cand_id, index_id)).
+
+    `nn_count` overrides config_demo's DEMO_NN_COUNT (default 30). When the
+    requested value differs from the value cached in manifest.json, this stage
+    recomputes AND deletes downstream stage outputs (scored_pairs + align)
+    since they depend on the blocking output.
+    """
     out_path = Path(cache_dir) / "blocking_pairs.joblib"
+    # Determine effective nn_count (None → use whatever config already has).
+    effective_k = (int(nn_count)
+                   if nn_count is not None
+                   else int(config.Blocking.cand_pairs_per_item_list[0]))
+    # Cache-hit gate: output exists AND recorded K matches the requested K.
     if out_path.exists():
-        _record_stage(cache_dir, 'blocking', 0.0, cache_hit=True)
-        return joblib.load(out_path)
+        manifest = read_manifest(cache_dir)
+        cached_k = manifest.get('stages', {}).get('blocking', {}).get('nn_count')
+        if cached_k is None or int(cached_k) == effective_k:
+            _record_stage(cache_dir, 'blocking', 0.0, cache_hit=True, nn_count=effective_k)
+            return joblib.load(out_path)
+        # K mismatch — drop the downstream outputs so they recompute on next click.
+        logger.info(f"[stage_blocking] K changed: cached={cached_k}, requested={effective_k} — "
+                    f"invalidating downstream classify/align outputs.")
+        _invalidate_downstream_of_blocking(cache_dir)
+
+    # Apply K override before running the blocker (it reads config at init).
+    config.Blocking.cand_pairs_per_item_list = [effective_k]
+    config.Blocking.nn_param = effective_k + 1
 
     object_dict = joblib.load(Path(cache_dir) / "object_dict.joblib")
     property_dict = joblib.load(Path(cache_dir) / "property_dict.joblib")
@@ -227,7 +250,7 @@ def stage_blocking(cache_dir: Path, progress_cb=None) -> List[Tuple[str, str]]:
     property_ratios = joblib.load(pr_path)
 
     t0 = time.time()
-    if progress_cb: progress_cb('blocking', 'running BKAFI KDTree NN search')
+    if progress_cb: progress_cb('blocking', f'running BKAFI KDTree NN search (K={effective_k})')
     blocker = Blocker(
         dataset_name=config.Constants.dataset_name,
         object_dict={'cands': object_dict['cands'], 'index': object_dict['index']},
@@ -247,8 +270,34 @@ def stage_blocking(cache_dir: Path, progress_cb=None) -> List[Tuple[str, str]]:
     joblib.dump(all_pairs, out_path, compress=3)
 
     _record_stage(cache_dir, 'blocking', time.time() - t0, cache_hit=False,
-                  n_pairs=len(all_pairs), n_pos=len(pos_pairs))
+                  n_pairs=len(all_pairs), n_pos=len(pos_pairs), nn_count=effective_k)
     return all_pairs
+
+
+def _invalidate_downstream_of_blocking(cache_dir: Path) -> None:
+    """Delete classify + align outputs so they recompute on the next click.
+    Called when blocking re-runs with a different K (their inputs change)."""
+    cache_dir = Path(cache_dir)
+    for stub in ('scored_pairs.joblib',
+                 'aligned_candidates_seed1.json',
+                 'aligned_candidates_seed1.prebaked.json',
+                 'alignment_info.json',
+                 'anchor_pairs.json',
+                 'matches.csv',
+                 'matches.parquet',
+                 'matches_by_cand.json',
+                 'metrics_summary.json',
+                 'post_disaster_cands.json',
+                 'post_disaster_cands.prebaked.json',
+                 'disaster_log.json'):
+        p = cache_dir / stub
+        if p.exists():
+            try: p.unlink()
+            except OSError: pass
+    manifest = read_manifest(cache_dir)
+    for s in ('classify', 'align'):
+        manifest.get('stages', {}).pop(s, None)
+    _atomic_write_json(manifest, cache_dir / "manifest.json")
 
 
 def stage_classify(cache_dir: Path, progress_cb=None) -> List[Tuple[str, str, float]]:
@@ -295,6 +344,7 @@ def stage_classify(cache_dir: Path, progress_cb=None) -> List[Tuple[str, str, fl
 def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
                 match_threshold: float = DEFAULT_MATCH_THRESHOLD,
                 post_align_blocking: bool = False,
+                post_align_knn_cutoff: float = None,
                 progress_cb=None) -> dict:
     """
     RANSAC rigid alignment + re-score + write all Step-4 artifacts.
@@ -316,17 +366,26 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     aligned_path = Path(cache_dir) / f"aligned_candidates_seed{seed}.json"
     info_path    = Path(cache_dir) / "alignment_info.json"
     mbc_path     = Path(cache_dir) / "matches_by_cand.json"
-    # Cache hit only if the cached run matches the requested mode AND the
-    # matches_by_cand.json schema matches what this version of stage_align
-    # produces (post-align mode now writes a 'pool' field per cand; older
-    # caches don't and must be regenerated).
+    # Resolve the effective cutoff (None ⇒ use whatever config currently has).
+    effective_cutoff = (float(post_align_knn_cutoff)
+                        if post_align_knn_cutoff is not None
+                        else float(config.Alignment.post_align_knn_cutoff))
+    # Cache hit only if the cached run matches the requested mode AND cutoff
+    # AND the matches_by_cand.json schema matches what this version of
+    # stage_align produces (post-align mode now writes a 'pool' field per cand;
+    # older caches don't and must be regenerated).
     if aligned_path.exists() and info_path.exists():
         try:
             with open(info_path) as f:
                 cached_info = json.load(f)
             mode_match = bool(cached_info.get('post_align_blocking', False)) == bool(post_align_blocking)
+            cached_cutoff = cached_info.get('cutoff_m')
+            # Require the cached value to be present AND equal. Missing field
+            # = old schema → force recompute so the new cutoff applies.
+            cutoff_match = (cached_cutoff is not None
+                            and abs(float(cached_cutoff) - effective_cutoff) < 1e-6)
             schema_ok = True
-            if mode_match and post_align_blocking and mbc_path.exists():
+            if mode_match and cutoff_match and post_align_blocking and mbc_path.exists():
                 try:
                     with open(mbc_path) as f:
                         mbc = json.load(f)
@@ -338,11 +397,14 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
                             break
                 except (json.JSONDecodeError, OSError):
                     schema_ok = False
-            if mode_match and schema_ok:
+            if mode_match and cutoff_match and schema_ok:
                 _record_stage(cache_dir, 'align', 0.0, cache_hit=True)
                 return cached_info
         except (json.JSONDecodeError, OSError):
             pass  # fall through to recompute
+
+    # Apply cutoff override before anything downstream reads config.
+    config.Alignment.post_align_knn_cutoff = effective_cutoff
 
     object_dict = joblib.load(Path(cache_dir) / "object_dict.joblib")
     scored_pairs = joblib.load(Path(cache_dir) / "scored_pairs.joblib")
@@ -463,6 +525,7 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
         'match_threshold': float(match_threshold),
         'seed': int(seed),
         'post_align_blocking': bool(post_align_blocking),
+        'cutoff_m': float(effective_cutoff),
     }
     _atomic_write_json(info, info_path)
 
@@ -491,6 +554,8 @@ def run_through(target_stage: str, cache_dir: Path, *,
                 apply_disaster: bool = True,
                 filter_shared_ids: bool = False,
                 post_align_blocking: bool = False,
+                nn_count: int = None,
+                post_align_knn_cutoff: float = None,
                 progress_cb=None) -> dict:
     """
     Run every stage up to and including `target_stage`, in order. Each stage is
@@ -508,9 +573,12 @@ def run_through(target_stage: str, cache_dir: Path, *,
             stage_preprocess(cache_dir, cands_path=cands_path, index_path=index_path,
                              seed=seed, apply_disaster=apply_disaster,
                              filter_shared_ids=filter_shared_ids, progress_cb=progress_cb)
+        elif s == 'blocking':
+            stage_blocking(cache_dir, nn_count=nn_count, progress_cb=progress_cb)
         elif s == 'align':
             summary = stage_align(cache_dir, seed=seed, match_threshold=match_threshold,
                                   post_align_blocking=post_align_blocking,
+                                  post_align_knn_cutoff=post_align_knn_cutoff,
                                   progress_cb=progress_cb)
         else:
             STAGE_FUNCS[s](cache_dir, progress_cb=progress_cb)

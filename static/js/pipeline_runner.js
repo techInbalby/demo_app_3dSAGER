@@ -49,11 +49,12 @@
     listeners[kind][stage].push(cb);
   }
 
-  async function _postStart(stage) {
+  async function _postStart(stage, extraBody) {
+    const body = Object.assign({ stage }, extraBody || {});
     const res = await fetch(API_START, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ stage }),
+      body:    JSON.stringify(body),
     });
     if (!res.ok) {
       let detail;
@@ -141,7 +142,9 @@
       if (typeof opts.onComplete === 'function') _registerListener('complete', stage, opts.onComplete);
       if (typeof opts.onError    === 'function') _registerListener('error',    stage, opts.onError);
     }
-    const startPayload = await _postStart(stage);
+    // Caller can pass extra body fields (e.g. {nn_count, post_align_knn_cutoff})
+    // under opts.body — the runner doesn't care what they are, just forwards.
+    const startPayload = await _postStart(stage, opts && opts.body);
     active[stage] = {
       task_id:    startPayload.task_id,
       started_at: Date.now(),

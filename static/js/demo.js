@@ -1948,8 +1948,12 @@ function runBKAFI() {
         stepBtn.disabled = false;
     };
     
-    // Run the BKAFI blocking stage live (cache HIT if it already ran).
+    // Run the BKAFI blocking stage live (cache HIT if K matches the cached run).
+    const kInput = document.getElementById('cfg-blocking-k');
+    const kVal = kInput ? parseInt(kInput.value, 10) : NaN;
+    const body = (Number.isFinite(kVal) && kVal >= 1) ? { nn_count: kVal } : undefined;
     window.PipelineRunner.start('blocking', {
+        body,
         onProgress: ({ sub_stage, message, elapsed_s }) => {
             const label = sub_stage ? `[${sub_stage}] ${message || ''}` : (message || 'Running…');
             showLoading(`${label} (${elapsed_s || 0}s)`);

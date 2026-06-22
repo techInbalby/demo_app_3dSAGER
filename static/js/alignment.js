@@ -168,8 +168,16 @@
     if (btn) { btn.textContent = 'Running…'; btn.disabled = true; }
     if (typeof window.showLoading === 'function') window.showLoading('Running spatial alignment…');
 
+    // Pick up the current cutoff input so the pipeline can recompute when the
+    // user changes it. Falls back to backend default if the input is missing
+    // or unparseable.
+    const cutoffInput = document.getElementById('cfg-align-cutoff');
+    const cutoffVal   = cutoffInput ? parseFloat(cutoffInput.value) : NaN;
+    const body = (Number.isFinite(cutoffVal) && cutoffVal > 0)
+      ? { post_align_knn_cutoff: cutoffVal } : undefined;
     try {
       await window.PipelineRunner.start('alignment', {
+        body,
         onProgress: _onAlignmentProgress,
         onComplete: async () => {
           if (typeof window.hideLoading === 'function') window.hideLoading();
