@@ -314,14 +314,31 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     recall from ~47%% (BKAFI ceiling on the demo) to ~100%%.
     """
     aligned_path = Path(cache_dir) / f"aligned_candidates_seed{seed}.json"
-    info_path = Path(cache_dir) / "alignment_info.json"
-    # Cache hit only if the cached run matches the requested mode (otherwise the
-    # metrics + matches.csv on disk are from a different scoring regime).
+    info_path    = Path(cache_dir) / "alignment_info.json"
+    mbc_path     = Path(cache_dir) / "matches_by_cand.json"
+    # Cache hit only if the cached run matches the requested mode AND the
+    # matches_by_cand.json schema matches what this version of stage_align
+    # produces (post-align mode now writes a 'pool' field per cand; older
+    # caches don't and must be regenerated).
     if aligned_path.exists() and info_path.exists():
         try:
             with open(info_path) as f:
                 cached_info = json.load(f)
-            if bool(cached_info.get('post_align_blocking', False)) == bool(post_align_blocking):
+            mode_match = bool(cached_info.get('post_align_blocking', False)) == bool(post_align_blocking)
+            schema_ok = True
+            if mode_match and post_align_blocking and mbc_path.exists():
+                try:
+                    with open(mbc_path) as f:
+                        mbc = json.load(f)
+                    # Find first cand entry and verify it has 'pool'.
+                    for _file, by_id in mbc.items():
+                        if by_id:
+                            first = next(iter(by_id.values()))
+                            schema_ok = isinstance(first.get('pool'), list)
+                            break
+                except (json.JSONDecodeError, OSError):
+                    schema_ok = False
+            if mode_match and schema_ok:
                 _record_stage(cache_dir, 'align', 0.0, cache_hit=True)
                 return cached_info
         except (json.JSONDecodeError, OSError):
@@ -374,11 +391,22 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     # BKAFI's geometric-feature shortlist.
     n_gt_override = None
     distance_by_pair = None
+    pool_by_cand = None
     if post_align_blocking and aligner.alignment_succeeded:
         if progress_cb: progress_cb('align', 'post-alignment KNN re-blocking')
         cutoff_m = float(config.Alignment.post_align_knn_cutoff)
+        # Snapshot the original BKAFI pool BEFORE the NN replacement so we can
+        # build the per-cand pool view for the UI (top-k by post-align score).
+        orig_bkafi_pool = list(scored_pairs)
         scored_pairs, rescored_pairs, distance_by_pair = post_align_knn_block(
             object_dict, aligner, pre_alignment_cand_centroids, cutoff_m=cutoff_m,
+        )
+        # Build per-cand pool: BKAFI pairs annotated with post-align distance +
+        # final_score, plus the NN pick (added if not already in BKAFI). Sorted
+        # by final_score desc, so top-N for the UI is just pool[:N].
+        pool_by_cand = _build_post_align_pool(
+            orig_bkafi_pool, rescored_pairs, distance_by_pair,
+            object_dict, aligner, pre_alignment_cand_centroids, cutoff_m,
         )
         # Fair denominator for metrics: every cand whose true counterpart exists
         # in the index is in principle recoverable post-alignment, regardless of
@@ -416,7 +444,10 @@ def stage_align(cache_dir: Path, seed: int = DEFAULT_SEED,
     except (ImportError, Exception) as e:   # pyarrow may be missing in worker
         logger.info(f"[stage_align] parquet skipped: {e}")
 
-    matches_by_cand = _group_matches_by_cand(df, cands_filename=f"aligned_candidates_seed{seed}.json")
+    matches_by_cand = _group_matches_by_cand(
+        df, cands_filename=f"aligned_candidates_seed{seed}.json",
+        pool_by_cand=pool_by_cand,
+    )
     _atomic_write_json(matches_by_cand, Path(cache_dir) / "matches_by_cand.json")
 
     if metrics is not None:
@@ -610,9 +641,67 @@ def _build_matches_tables(scored_pairs, rescored_pairs, match_threshold,
     return df, metrics
 
 
-def _group_matches_by_cand(df: pd.DataFrame, cands_filename: str) -> dict:
-    """Group rows by cand_id in the schema the demo's frontend expects."""
+def _build_post_align_pool(orig_bkafi_pool, rescored_pairs, distance_by_pair,
+                            object_dict, aligner, pre_alignment_cand_centroids, cutoff_m):
+    """Per-cand pool of (BKAFI pairs ∪ NN pick), each annotated with the
+    post-alignment distance and final_score = 1 − d/cutoff_m. Ranked by
+    final_score desc so top-N for the UI is just `pool[:N]`."""
+    idx_centroids = {bid: np.asarray(data['centroid'], dtype=np.float64).copy()
+                     for bid, data in object_dict['index'].items()}
+    nn_pick_by_cid = {cid: (iid, fs) for (cid, iid, fs) in rescored_pairs}
+    pool_by_cand = {}
+    # 1. BKAFI pairs (with their classifier scores) plus post-align distance.
+    for cid, iid, geo_score in orig_bkafi_pool:
+        qc = pre_alignment_cand_centroids.get(cid)
+        idx_pt = idx_centroids.get(iid)
+        if qc is None or idx_pt is None:
+            continue
+        d = float(np.linalg.norm((aligner.R @ qc) + aligner.t - idx_pt))
+        fs = 1.0 - d / cutoff_m
+        geo_f = float(geo_score)
+        pool_by_cand.setdefault(str(cid), []).append({
+            'index_id':         str(iid),
+            'geometric_score':  round(geo_f, 4),
+            'confidence':       round(geo_f, 4),     # XGBoost classifier confidence
+            'predicted_label':  int(geo_f >= 0.5),    # XGBoost legacy threshold
+            'true_label':       1 if str(cid) == str(iid) else 0,
+            'final_score':      round(fs, 4),
+            'distance_m':       round(d, 3),
+            'is_nn_pick':       False,
+        })
+    # 2. NN pick: mark or insert.
+    for cid, (iid_nn, fs_nn) in nn_pick_by_cid.items():
+        cid_str = str(cid)
+        existing = pool_by_cand.setdefault(cid_str, [])
+        match = next((e for e in existing if e['index_id'] == str(iid_nn)), None)
+        if match is not None:
+            match['is_nn_pick'] = True
+        else:
+            d_nn = distance_by_pair.get((cid, iid_nn)) if distance_by_pair else None
+            existing.append({
+                'index_id':         str(iid_nn),
+                'geometric_score':  None,  # not classified by XGBoost
+                'confidence':       None,
+                'predicted_label':  None,
+                'true_label':       1 if str(cid) == str(iid_nn) else 0,
+                'final_score':      round(float(fs_nn), 4),
+                'distance_m':       round(float(d_nn), 3) if d_nn is not None else None,
+                'is_nn_pick':       True,
+            })
+    # 3. Sort each cand's pool by final_score desc (None goes last).
+    for cid_str in pool_by_cand:
+        pool_by_cand[cid_str].sort(key=lambda e: -(e['final_score'] if e['final_score'] is not None else -1e9))
+    return pool_by_cand
+
+
+def _group_matches_by_cand(df: pd.DataFrame, cands_filename: str,
+                            pool_by_cand: dict = None) -> dict:
+    """Group rows by cand_id in the schema the demo's frontend expects. Each
+    cand entry has `possible_matches` (1-NN-only in post-align mode, used for
+    metrics + colour rules) and optionally `pool` (BKAFI pairs ranked by
+    post-align final_score, used by the inspection UI)."""
     has_distance = 'distance_m' in df.columns
+    pool_by_cand = pool_by_cand or {}
     grouped = {}
     for cand_id, sub in df.groupby('cand_id'):
         possible = []
@@ -632,5 +721,9 @@ def _group_matches_by_cand(df: pd.DataFrame, cands_filename: str) -> dict:
                 # Frontend hides this when null; NaN ⇒ omit cleanly.
                 entry['distance_m'] = d if d == d else None  # NaN-safe
             possible.append(entry)
-        grouped[str(cand_id)] = {'possible_matches': possible}
+        cand_entry = {'possible_matches': possible}
+        pool = pool_by_cand.get(str(cand_id))
+        if pool:
+            cand_entry['pool'] = pool
+        grouped[str(cand_id)] = cand_entry
     return {cands_filename: grouped}

@@ -99,9 +99,9 @@
     }
 
     _setInfoCard(
-      `<strong>Spatial alignment — results</strong><br>` +
+      `<strong>Geospatial alignment — results</strong><br>` +
       `Mean residual: <strong>${mr}</strong> · ` +
-      `anchor pairs: <strong>${np}</strong>` +
+      `potential anchors: <strong>${np}</strong>` +
       metricsHtml
     );
   }

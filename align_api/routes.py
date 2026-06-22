@@ -120,6 +120,15 @@ def alignment_cand(cand_id):
     pool = loaders.bkafi_pool_for_cand(cand_id)
     in_pool = bool(pool) and any(str(p.get('index_id')) == str(nn.get('index_id')) for p in pool)
 
+    # Top-N pool by post-align final_score (BKAFI pairs ∪ NN pick, sorted).
+    # The UI carousel uses this directly as its 3-pair list.
+    try:
+        limit = max(1, min(int(request.args.get('pool_limit', 3)), 20))
+    except (TypeError, ValueError):
+        limit = 3
+    pool = cand_entry.get('pool', [])
+    pool_top = pool[:limit]
+
     return jsonify({
         'cand_id': str(cand_id),
         'nn_match': {
@@ -129,6 +138,8 @@ def alignment_cand(cand_id):
             'predicted_label': nn.get('predicted_label'),
             'true_label':      nn.get('true_label'),
         },
+        'pool':                pool_top,
+        'pool_total':          len(pool),
         'in_blocking_pool':    in_pool,
         'alignment_succeeded': bool(info.get('alignment_succeeded')),
         'match_threshold':     info.get('match_threshold'),

@@ -3053,3 +3053,17 @@ body.mobile-panel-open {
 .nn-pool-no  { background: #fff3e0; color: #b26a00; border: 1px solid #ffd4a3; }
 
 .nn-star { color: #d4a017; font-size: 14px; margin-left: 4px; }
+
+/* ── Pipeline final-pick banner (post-reveal, in the three.js panel) ── */
+.final-match-banner {
+    margin: 8px 0 10px;
+    padding: 8px 10px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.4;
+    border-left: 4px solid #d4a017;
+    background: #fffbe6;
+}
+.final-match-banner.accepted { border-left-color: #4caf50; background: #ecf7ed; }
+.final-match-banner.rejected { border-left-color: #785090; background: #f3eef8; }
+.final-match-banner code     { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 3px; }

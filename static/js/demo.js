@@ -78,7 +78,7 @@ const tutorialSteps = [
                         <span>Score each shortlisted pair with the trained XGBoost classifier.</span>
                     </li>
                     <li>
-                        <strong>4 — Spatial Alignment</strong>
+                        <strong>4 — GeoSpatial Alignment</strong>
                         <span>Recover the rigid transform from the high-confidence matches and re-block spatially. Headline P / R / F1 appear in the sidebar after this stage.</span>
                     </li>
                 </ol>
@@ -1568,28 +1568,29 @@ function renderBuildingAlignmentCallout(payload) {
     if (!wrap || !payload || !payload.nn_match) return;
     const nn       = payload.nn_match;
     const d        = nn.distance_m;
-    const dTxt     = (d == null || Number.isNaN(d)) ? 'n/a' : `${Number(d).toFixed(2)} m`;
+    const dNum     = (d != null && !Number.isNaN(d)) ? Number(d) : null;
+    const dTxt     = (dNum != null) ? `${dNum.toFixed(2)} m` : 'n/a';
     const cutoff   = payload.cutoff_m || 7.0;
     const inPool   = !!payload.in_blocking_pool;
-    const pred     = Number(nn.predicted_label) === 1;
+    const within   = (dNum != null) && (dNum <= cutoff);
     const trueLbl  = Number(nn.true_label) === 1;
     let variant, title, body;
-    if (pred && trueLbl) {
+    if (within && trueLbl) {
         variant = 'green';
         title   = 'Confirmed match (true positive)';
-        body    = `1-NN landed on the correct same-ID building <code>${nn.index_id}</code> at <strong>${dTxt}</strong>.`;
-    } else if (pred && !trueLbl) {
+        body    = `1-NN landed on the correct same-ID building <code>${nn.index_id}</code> at <strong>${dTxt}</strong> — within the ${cutoff} m cutoff distance.`;
+    } else if (within && !trueLbl) {
         variant = 'red';
         title   = 'Predicted match — ground truth disagrees (false positive)';
-        body    = `1-NN picked <code>${nn.index_id}</code> at <strong>${dTxt}</strong>, but the true counterpart is a different building.`;
-    } else if (!pred && trueLbl) {
+        body    = `1-NN picked <code>${nn.index_id}</code> at <strong>${dTxt}</strong> (within the ${cutoff} m cutoff distance), but the true counterpart is a different building.`;
+    } else if (!within && trueLbl) {
         variant = 'purple';
-        title   = 'False negative — rejected by distance cutoff';
-        body    = `1-NN found the correct same-ID building <code>${nn.index_id}</code>, but at <strong>${dTxt}</strong> — exceeding the <strong>${cutoff} m</strong> cutoff. The spatial step rejected the match (final_score went negative).`;
+        title   = 'Same-ID building found, but too far away';
+        body    = `1-NN landed on the correct same-ID building <code>${nn.index_id}</code>, but at <strong>${dTxt}</strong> — beyond the ${cutoff} m cutoff distance, so the spatial step considers it too far to confirm.`;
     } else {
         variant = 'grey';
-        title   = 'No match';
-        body    = `1-NN landed on <code>${nn.index_id}</code> at <strong>${dTxt}</strong>. This candidate has no same-ID counterpart in the index dataset.`;
+        title   = 'No reliable match';
+        body    = `1-NN landed on <code>${nn.index_id}</code> at <strong>${dTxt}</strong>. ${dNum != null && dNum > cutoff ? `Beyond the ${cutoff} m cutoff distance and ` : ''}this candidate has no same-ID counterpart in the index dataset.`;
     }
     const poolChip = inPool
         ? `<span class="nn-pool-chip nn-pool-yes" title="The 1-NN's index_id was also in the BKAFI blocking pool">in blocking pool</span>`
@@ -2069,42 +2070,34 @@ function showBkafiPairs(pairs, buildingId = null) {
     viewButton.onclick = async () => {
         const containerBuildingId = bkafiContainer.getAttribute('data-building-id');
         let containerPairs = JSON.parse(bkafiContainer.getAttribute('data-pairs'));
-        // After Step 4, inject the spatial-NN match if it isn't already in the
-        // top BKAFI pairs the carousel shows. Tag with _nnInjected so the
-        // carousel render can decorate the slide.
+        // After Step 4, replace the BKAFI-ranked carousel with the post-align
+        // pool (BKAFI pairs ∪ NN pick, ranked by final_score). The backend
+        // returns top-N already sorted; we just map field names so the existing
+        // carousel render keeps working.
         if (window.pipelineState && window.pipelineState.step4Completed) {
             try {
                 const m = String(containerBuildingId).match(/(\d{10,})/);
                 const numericId = m ? m[1] : String(containerBuildingId);
-                const r = await fetch(`/api/alignment/cand/${encodeURIComponent(numericId)}`);
+                const r = await fetch(`/api/alignment/cand/${encodeURIComponent(numericId)}?pool_limit=3`);
                 if (r.ok) {
                     const info = await r.json();
                     window._lastAlignmentInfo = info;
-                    const nnId = String(info.nn_match.index_id);
-                    // The carousel slices to the first 3 entries — make sure
-                    // the NN is in that window. If it's there already, mark it;
-                    // otherwise prepend it as a new entry.
-                    const existingIdx = containerPairs.findIndex(p => String(p.index_id) === nnId);
-                    if (existingIdx === -1) {
-                        containerPairs = [{
-                            index_id:        info.nn_match.index_id,
-                            confidence:      info.nn_match.final_score,
-                            predicted_label: info.nn_match.predicted_label,
-                            true_label:      info.nn_match.true_label,
-                            distance_m:      info.nn_match.distance_m,
-                            _nnInjected:     true,
-                            _nnInPool:       false,
-                        }, ...containerPairs];
-                    } else {
-                        containerPairs[existingIdx] = {
-                            ...containerPairs[existingIdx],
-                            _nnInjected: true,
-                            _nnInPool:   true,
-                            distance_m:  info.nn_match.distance_m,
-                        };
+                    if (Array.isArray(info.pool) && info.pool.length > 0) {
+                        containerPairs = info.pool.map(p => ({
+                            index_id:        p.index_id,
+                            // Confidence column shows the XGBoost classifier score
+                            // for the BKAFI pairs; the NN-only pick has none (null).
+                            confidence:      (p.confidence != null) ? p.confidence : null,
+                            predicted_label: p.predicted_label,
+                            true_label:      p.true_label,
+                            final_score:     p.final_score,
+                            distance_m:      p.distance_m,
+                            _nnInjected:     !!p.is_nn_pick,
+                            _nnInPool:       !!p.is_nn_pick && p.confidence != null,
+                        }));
                     }
                 }
-            } catch (e) { console.debug('NN injection failed:', e); }
+            } catch (e) { console.debug('alignment pool fetch failed:', e); }
         }
         openBkafiComparisonWindow(containerBuildingId, containerPairs);
     };
@@ -2397,7 +2390,11 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         prevBtn.disabled = false;
         nextBtn.disabled = false;
         const currentPair = pairsToShow[currentIdx];
-        if (currentPair && currentPair._nnInjected) {
+        // The NN-injected marker is only revealed AFTER the user clicks Reveal —
+        // otherwise it spoils which pair the spatial step picked. Before reveal,
+        // every slide shows only its index_id like a normal BKAFI option.
+        const revealed = comparisonWindow.getAttribute('data-revealed') === '1';
+        if (revealed && currentPair && currentPair._nnInjected) {
             const chip = currentPair._nnInPool
                 ? '<span class="nn-pool-chip nn-pool-yes" style="margin-left:6px">also in blocking pool</span>'
                 : '<span class="nn-pool-chip nn-pool-no" style="margin-left:6px">not in blocking pool</span>';
@@ -2493,6 +2490,10 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     // expose so showClassifierResultsInComparisonWindow can trigger the first paint
     comparisonWindow._applyRevealToCurrent = applyRevealToCurrent;
     comparisonWindow._goTo = goTo;
+    // After Reveal the carousel needs to re-render so the ⭐ NN-match label
+    // and "in / not in blocking pool" chip appear on the current slide. The
+    // reveal handler calls this — it's harmless to no-op before reveal too.
+    comparisonWindow._refreshCarouselLabels = updateCarouselUI;
 
     // ── parallel fetch + load ──────────────────────────────────────────────────
     updateCarouselUI(); // show counters immediately (disabled state)
@@ -2936,6 +2937,9 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
 
     // Apply result styling to the carousel card (for whatever is currently shown)
     if (compWin && compWin._applyRevealToCurrent) compWin._applyRevealToCurrent();
+    // Re-render the current slide's label so the NN ⭐ + pool chip appear now
+    // that data-revealed='1' is set.
+    if (compWin && compWin._refreshCarouselLabels) compWin._refreshCarouselLabels();
 
     // ── score banner + details below both viewers ─────────────────────────────
     const classifierSection = document.getElementById('comparison-classifier-section');
@@ -2985,10 +2989,42 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
     const table = document.createElement('div');
     table.style.cssText = 'font-size:12px;width:100%;';
 
-    // Header row
+    // Find the spatial-NN (final pipeline) pick — it's the slide tagged
+    // _nnInjected by the View-Pairs onclick. After Step 4 this IS the
+    // pipeline's final match for this cand. Before Step 4 (hybrid mode) the
+    // tag is absent and we fall back to the model-pick column only.
+    const finalIdx = pairsToShow.findIndex(p => p && p._nnInjected);
+    const finalDistance = (finalIdx >= 0 && pairsToShow[finalIdx].distance_m != null)
+        ? Number(pairsToShow[finalIdx].distance_m).toFixed(2) + ' m' : null;
+
+    // Banner naming the pipeline's final pick. Decision is purely distance-based:
+    // the 1-NN is the final pick; if it's beyond the cutoff distance the
+    // spatial step considers it unreliable, otherwise it's confirmed.
+    if (finalIdx >= 0) {
+        const finalPair = pairsToShow[finalIdx];
+        const ai        = window._lastAlignmentInfo || {};
+        const cutoff    = (ai.cutoff_m != null) ? Number(ai.cutoff_m) : 7.0;
+        const d         = (finalPair.distance_m != null) ? Number(finalPair.distance_m) : null;
+        const dTxt      = (d != null) ? `${d.toFixed(2)} m` : 'n/a';
+        const within    = (d != null) && (d <= cutoff);
+        const banner    = document.createElement('div');
+        banner.className = `final-match-banner ${within ? 'accepted' : 'rejected'}`;
+        const detail = within
+            ? `Distance <strong>${dTxt}</strong> — within the ${cutoff} m cutoff distance, match is confirmed.`
+            : `Distance <strong>${dTxt}</strong> — beyond the ${cutoff} m cutoff distance, the nearest building is too far to be a reliable match.`;
+        banner.innerHTML = `⭐ <strong>Pipeline's final pick:</strong> Option ${finalIdx + 1} — Index <code>${finalPair.index_id}</code>. ${detail}`;
+        classifierSection.appendChild(banner);
+    }
+
+    // Header row — adds Distance + Final Pick columns when post-align data
+    // is present. The pipeline's final pick is decided purely by distance
+    // (the 1-NN within the cutoff), so we surface the distance directly
+    // rather than the derived final_score.
+    const cutoffForLabel = (window._lastAlignmentInfo && window._lastAlignmentInfo.cutoff_m) || 7.0;
+    const gridCols = 'display:grid;grid-template-columns:0.9fr 1.5fr 0.8fr 0.9fr 1.0fr 0.9fr;gap:6px;';
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;justify-content:space-between;padding:3px 2px 5px;border-bottom:2px solid #e2e8f0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;';
-    header.innerHTML = `<span>Option</span><span>Model Prediction (threshold: ${thresholdPct})</span><span>Confidence</span><span>True Label</span>`;
+    header.style.cssText = `${gridCols}padding:3px 2px 5px;border-bottom:2px solid #e2e8f0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;`;
+    header.innerHTML = `<span>Option</span><span>Model Prediction (threshold: ${thresholdPct})</span><span>Confidence</span><span>True Label</span><span title="Post-alignment distance between this option and the candidate, in metres.">Distance</span><span>Final Pick</span>`;
     table.appendChild(header);
 
     pairsToShow.forEach((pair, i) => {
@@ -2998,16 +3034,42 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
         const tlColor   = tl === 1 ? '#22c55e' : (tl === 0 ? '#f97316' : '#94a3b8');
         const confPct   = pair.confidence !== undefined ? `${(pair.confidence * 100).toFixed(0)}%` : '—';
         const isUserPick = userGuess === i ? ' (Your Pick)' : '';
+        const isFinal = (i === finalIdx);
+        const rowBg = isFinal ? 'background:#fffbe6;' : '';
         const row = document.createElement('div');
-        row.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:5px 2px;border-bottom:1px solid #f0f0f0;cursor:pointer;';
+        row.style.cssText = `${gridCols}align-items:center;padding:5px 4px;border-bottom:1px solid #f0f0f0;cursor:pointer;${rowBg}`;
         const predictionLabel = pred === 1
             ? `Match (>= ${thresholdPct})`
             : `No (< ${thresholdPct})`;
+        // Distance cell — the underlying number the spatial step ranks on.
+        let distanceCell;
+        if (pair.distance_m == null) {
+            distanceCell = '<span style="color:#cbd5e1">—</span>';
+        } else {
+            const dNum = Number(pair.distance_m);
+            const within = dNum <= cutoffForLabel;
+            const colour = within ? '#15803d' : '#b45309';
+            distanceCell = `<span style="color:${colour}" title="${within ? 'Within' : 'Beyond'} the ${cutoffForLabel} m cutoff distance"><strong>${dNum.toFixed(2)} m</strong></span>`;
+        }
+        // Final Pick decision = distance against cutoff (same rule the banner
+        // uses). Don't read predicted_label here: it's null for the NN-only
+        // pick when it wasn't classified by XGBoost, which would wrongly
+        // render as "too far" even when the distance is well within cutoff.
+        let finalCell;
+        if (!isFinal) {
+            finalCell = '<span style="color:#cbd5e1">—</span>';
+        } else if (pair.distance_m != null && Number(pair.distance_m) <= cutoffForLabel) {
+            finalCell = `<span title="Pipeline's final pick — within ${cutoffForLabel} m cutoff distance">⭐ confirmed</span>`;
+        } else {
+            finalCell = `<span title="Pipeline's final pick — beyond ${cutoffForLabel} m cutoff distance">⭐ too far</span>`;
+        }
         row.innerHTML = `
             <span style="font-weight:600;color:#555;">Opt ${i + 1}${isUserPick}</span>
             <span>Model: <strong style="color:${predColor}">${predictionLabel}</strong></span>
             <span>${confPct}</span>
-            <span>True: <strong style="color:${tlColor}">${tl === 1 ? 'Match' : tl === 0 ? 'No' : '—'}</strong></span>`;
+            <span>True: <strong style="color:${tlColor}">${tl === 1 ? 'Match' : tl === 0 ? 'No' : '—'}</strong></span>
+            <span>${distanceCell}</span>
+            <span>${finalCell}</span>`;
         // clicking a row navigates the carousel to that option
         row.addEventListener('click', () => { if (compWin && compWin._goTo) compWin._goTo(i); });
         row.addEventListener('mouseenter', () => row.style.background = '#f8fafc');
