@@ -62,6 +62,82 @@ def metrics_summary(cache_dir: Optional[Path] = None) -> Optional[dict]:
     return _read_json_cached(cache_dir / 'metrics_summary.json')
 
 
+def slice_cand_from_post_disaster(cache_dir: Optional[Path], cand_id) -> Optional[dict]:
+    """Extract a single-cand CityJSON 1.1 from the run's
+    `post_disaster_cands.json`. Walks the cand's boundaries to collect only
+    the vertices it uses and re-indexes them, so the returned payload is
+    a self-contained minimal CityJSON the three.js viewer can render.
+    Returns None when the cache file is missing or the cand isn't found.
+    Tries both `bag_<id>` and raw `<id>` forms."""
+    cache_dir = cache_dir or current_cache_dir()
+    full = _read_json_cached(Path(cache_dir) / 'post_disaster_cands.json')
+    if not full or 'CityObjects' not in full:
+        return None
+    objs = full['CityObjects']
+    key = None
+    for cand in (f'bag_{cand_id}', str(cand_id)):
+        if cand in objs:
+            key = cand
+            break
+    if key is None:
+        return None
+    cand_obj = objs[key]
+    all_verts = full.get('vertices', [])
+
+    # Walk arbitrarily-nested int boundaries; collect referenced vertex indices.
+    referenced = set()
+    def _walk(node):
+        if isinstance(node, int):
+            referenced.add(node)
+        elif isinstance(node, list):
+            for x in node:
+                _walk(x)
+    for g in cand_obj.get('geometry', []):
+        _walk(g.get('boundaries'))
+
+    # Build the index remap + the trimmed vertices array.
+    old_to_new = {old: new for new, old in enumerate(sorted(referenced))}
+    new_verts = [all_verts[old] for old in sorted(referenced)]
+
+    # Rewrite the geometry with remapped indices.
+    def _remap(node):
+        if isinstance(node, int):
+            return old_to_new[node]
+        if isinstance(node, list):
+            return [_remap(x) for x in node]
+        return node
+    geom_remapped = []
+    for g in cand_obj.get('geometry', []):
+        g2 = dict(g)
+        g2['boundaries'] = _remap(g.get('boundaries'))
+        geom_remapped.append(g2)
+
+    return {
+        'type':        full.get('type', 'CityJSON'),
+        'version':     full.get('version', '1.1'),
+        'metadata':    full.get('metadata', {}),
+        'CityObjects': {key: {**cand_obj, 'geometry': geom_remapped}},
+        'vertices':    new_verts,
+    }
+
+
+def damage_factor_for_cand(cache_dir: Optional[Path], cand_id) -> Optional[float]:
+    """Look up the per-building height-damage factor (~0.3-0.95, 1.0 = undamaged)
+    from disaster_log.json. Returns None if the log or the entry is missing."""
+    cache_dir = cache_dir or current_cache_dir()
+    log = _read_json_cached(Path(cache_dir) / 'disaster_log.json')
+    if not log:
+        return None
+    damage = log.get('damage_log') or log.get('damage') or {}
+    for key in (str(cand_id), f'bag_{cand_id}'):
+        if key in damage:
+            try:
+                return float(damage[key])
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
 def bkafi_pool_for_cand(cand_id) -> list:
     """Return the cand's BKAFI blocking pool from the Redis-backed bkafi:flat
     dict (populated by tasks.py:_bridge_to_legacy). Each entry has at least

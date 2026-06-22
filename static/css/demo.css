@@ -3091,3 +3091,38 @@ body.mobile-panel-open {
     border-color: var(--primary, #4a8bff);
     box-shadow: 0 0 0 2px rgba(74, 139, 255, 0.18);
 }
+
+/* ── Geometry toggle above the candidate 3D viewer ──────────────────────── */
+.cand-geom-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 6px;
+    font-size: 12px;
+}
+.cand-geom-label {
+    color: #64748b;
+    margin-right: 2px;
+}
+.cand-geom-btn {
+    padding: 3px 9px;
+    font-size: 11px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    border-radius: 4px;
+    cursor: pointer;
+    color: #334155;
+    transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.cand-geom-btn:hover { background: #f1f5f9; }
+.cand-geom-btn.active {
+    background: var(--primary, #4a8bff);
+    color: #fff;
+    border-color: var(--primary, #4a8bff);
+}
+.cand-damage-note {
+    margin: 4px 0 6px;
+    font-size: 11px;
+    color: #b45309;
+    font-style: italic;
+}

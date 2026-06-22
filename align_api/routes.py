@@ -147,6 +147,27 @@ def alignment_cand(cand_id):
     })
 
 
+@alignment_bp.route('/cand/<cand_id>/cityjson', methods=['GET'])
+def alignment_cand_cityjson(cand_id):
+    """Per-cand single-building CityJSON sliced out of post_disaster_cands.json.
+    Drives the "Post-disaster" toggle in the three.js comparison window so the
+    user can see the geometry the model actually saw."""
+    stage = request.args.get('stage', 'post_disaster').lower()
+    if stage != 'post_disaster':
+        return jsonify(error="stage must be 'post_disaster' (only one supported today)"), 400
+    (cache_info, err) = _ensure_aligned()
+    if err is not None:
+        return err
+    cache_dir, _ = cache_info
+    payload = loaders.slice_cand_from_post_disaster(cache_dir, cand_id)
+    if payload is None:
+        return jsonify(error=f"cand {cand_id} not found in post_disaster_cands.json"), 404
+    damage = loaders.damage_factor_for_cand(cache_dir, cand_id)
+    if damage is not None:
+        payload.setdefault('metadata', {})['damage_factor'] = damage
+    return jsonify(payload)
+
+
 @alignment_bp.route('/buildings/colors', methods=['GET'])
 def alignment_buildings_colors():
     stage = request.args.get('stage', '').lower()

@@ -2137,6 +2137,20 @@ async function _fetchBuildingDataForComparison(buildingId) {
     return { buildingId, numericId, cityJSON, filePath: fileData.file_path };
 }
 
+// Slice one cand out of post_disaster_cands.json — the actual geometry the
+// pipeline ran on (rotated + translated + height-damaged). Available only
+// after Step 4 runs.
+async function _fetchCandPostDisasterGeometry(buildingId) {
+    const numericId = String(buildingId).replace(/^[^_]*_/, '');
+    const r = await fetch(`/api/alignment/cand/${encodeURIComponent(numericId)}/cityjson?stage=post_disaster`);
+    if (!r.ok) {
+        let detail; try { detail = (await r.json()).error || r.statusText; } catch { detail = r.statusText; }
+        throw new Error(detail);
+    }
+    const cityJSON = await r.json();
+    return { buildingId, numericId, cityJSON };
+}
+
 /** Initialise a ThreeBuildingViewer inside viewerEl and load cityJSON (returns promise) */
 // Default blue matches the Cesium map default building color (116, 151, 223).
 // Pair slots each get a distinct vivid color so buildings are easy to tell apart.
@@ -2239,6 +2253,78 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     }
     if (candidateIdEl) candidateIdEl.textContent = `Candidate: ${candidateBuildingId}`;
     if (pairsViewersEl) pairsViewersEl.innerHTML = '';
+
+    // ── Geometry toggle (Post-disaster ↔ Pristine) ───────────────────────────
+    // The model runs on post-disaster geometry, so default to that whenever
+    // Step 4 has completed and the data is available. Pristine is the
+    // original Source A geometry, kept as a reference view.
+    const step4Done = !!(window.pipelineState && window.pipelineState.step4Completed);
+    let geomVariant = step4Done ? 'post_disaster' : 'pristine';
+    const damageNoteEl = document.createElement('div');
+    damageNoteEl.id = 'cand-damage-note';
+    damageNoteEl.className = 'cand-damage-note';
+    if (candidateViewerEl && candidateViewerEl.parentNode) {
+        // Insert toggle ABOVE the candidate viewer (only when step4 is done).
+        const old = document.getElementById('cand-geom-toggle');
+        if (old) old.remove();
+        const oldNote = document.getElementById('cand-damage-note');
+        if (oldNote) oldNote.remove();
+        if (step4Done) {
+            const toggleRow = document.createElement('div');
+            toggleRow.id = 'cand-geom-toggle';
+            toggleRow.className = 'cand-geom-toggle';
+            toggleRow.innerHTML = `
+                <span class="cand-geom-label">Geometry:</span>
+                <button type="button" class="cand-geom-btn active" data-variant="post_disaster" title="What the model actually saw (rotated + translated + height-damaged)">Post-disaster</button>
+                <button type="button" class="cand-geom-btn" data-variant="pristine" title="Original Source A geometry, before DisasterSimulator">Pristine</button>
+            `;
+            candidateViewerEl.parentNode.insertBefore(toggleRow, candidateViewerEl);
+            candidateViewerEl.parentNode.insertBefore(damageNoteEl, candidateViewerEl.nextSibling);
+            toggleRow.querySelectorAll('.cand-geom-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (btn.classList.contains('active')) return;
+                    toggleRow.querySelectorAll('.cand-geom-btn').forEach(b => b.classList.remove('active'));
+                    btn.classList.add('active');
+                    geomVariant = btn.getAttribute('data-variant');
+                    await _loadCandidateVariant(geomVariant);
+                });
+            });
+        }
+    }
+
+    async function _loadCandidateVariant(variant) {
+        if (!candidateViewerEl) return;
+        try {
+            let res;
+            if (variant === 'post_disaster') {
+                res = await _fetchCandPostDisasterGeometry(candidateBuildingId);
+                const df = res.cityJSON && res.cityJSON.metadata && res.cityJSON.metadata.damage_factor;
+                if (damageNoteEl) {
+                    if (df != null) {
+                        const pct = Math.round(Number(df) * 100);
+                        damageNoteEl.textContent = `Damage applied — height reduced to ${pct}% of original.`;
+                        damageNoteEl.style.display = 'block';
+                    } else {
+                        damageNoteEl.textContent = '';
+                        damageNoteEl.style.display = 'none';
+                    }
+                }
+            } else {
+                res = await _fetchBuildingDataForComparison(candidateBuildingId);
+                if (damageNoteEl) { damageNoteEl.textContent = ''; damageNoteEl.style.display = 'none'; }
+            }
+            await _loadCityJSONInViewer(res.buildingId, res.cityJSON, candidateViewerEl, 'candidate', _CANDIDATE_VIEWER_COLOR);
+        } catch (e) {
+            console.warn(`[cand toggle] failed to load ${variant}:`, e);
+            if (damageNoteEl) {
+                damageNoteEl.textContent = `Could not load ${variant} geometry.`;
+                damageNoteEl.style.display = 'block';
+            }
+        }
+    }
+    // Expose so the parallel-load block below can use the same code path.
+    comparisonWindow._loadCandidateVariant = _loadCandidateVariant;
+    comparisonWindow._currentGeomVariant   = () => geomVariant;
 
     // ── intro bar ─────────────────────────────────────────────────────────────
     const compContent = comparisonWindow.querySelector('.comparison-content');
@@ -2503,18 +2589,20 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
     updateCarouselUI(); // show counters immediately (disabled state)
     counter.textContent = `Loading… (0 / ${pairsToShow.length})`;
 
-    const allIds = [candidateBuildingId, ...pairsToShow.map(p => p.index_id)];
+    // Pair fetches stay pristine (Source B is never disaster-shifted). Cand is
+    // loaded via the variant-aware helper so the initial render respects the
+    // toggle default (post_disaster when Step 4 has run).
+    const pairIds = pairsToShow.map(p => p.index_id);
 
-    Promise.all(allIds.map(id =>
+    Promise.all(pairIds.map(id =>
         _fetchBuildingDataForComparison(id).catch(e => ({ error: e.message, buildingId: id }))
     )).then(async (results) => {
         // Store pair city data
-        pairCityData = results.slice(1).map(r => r.error ? null : r);
+        pairCityData = results.map(r => r.error ? null : r);
 
         // Load candidate viewer first, then pair (stagger to avoid dual WebGL init issues)
-        const candResult = results[0];
-        if (!candResult.error && candidateViewerEl) {
-            await _loadCityJSONInViewer(candResult.buildingId, candResult.cityJSON, candidateViewerEl, 'candidate', _CANDIDATE_VIEWER_COLOR);
+        if (candidateViewerEl) {
+            await _loadCandidateVariant(geomVariant);
         }
 
         // Small pause between WebGL context creations
