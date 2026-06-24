@@ -1765,11 +1765,10 @@ function calculateGeometricFeatures() {
             stepBtn.style.background = '#28a745';
             // Advance tutorial only after the UI is ready (button enabled, colors updating)
             advanceTutorialForPipelineAction('calculateFeatures');
-            // Swap Source A in the Cesium viewer to the heights-only damaged
-            // CityJSON the worker wrote during preprocess. Same geometry the
-            // pipeline saw (z-axis damage) but at original CRS coords so it
-            // overlays the Index layer.
-            reloadSourceAAsDamaged();
+            // No layer swap needed — Source A is already loaded as the
+            // damaged-heights variant via _sourceALoadOptions. Calling
+            // reloadSourceAAsDamaged() here would tear down + rebuild
+            // entities mid-color-update, leaving everything blue.
             updateBuildingColorsForStage1(true, function () {
                 clearSafety();
                 hideLoading();
