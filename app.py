@@ -63,6 +63,7 @@ from lib.cache import (
     get_bkafi_by_file_cache,
     set_bkafi_by_file_cache,
 )
+from lib.id_utils import extract_numeric_id, numeric_ids_match
 
 
 def build_features_from_parquet(parquet_path: Path):
@@ -477,16 +478,10 @@ def get_building_features(building_id):
                 print(f"Loaded features from cache for building {building_id}")
                 return jsonify({'building_id': building_id, 'features': features})
             
-            # Try to match by extracting numeric ID using regex (handle prefixes like "bag_", "NL.IMBAG.Pand.", etc.)
-            # Extract numeric part from building_id using regex (e.g., "bag_0518100000271783" -> "0518100000271783")
-            # Pattern: find a sequence of digits (10 or more digits for building IDs)
-            numeric_match = re.search(r'(\d{10,})', str(building_id))
-            if numeric_match:
-                numeric_id = numeric_match.group(1)
-            else:
-                # Fallback: try splitting by underscore
-                numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
-            numeric_id = str(numeric_id)  # Ensure it's a string
+            numeric_id = extract_numeric_id(building_id) or (
+                building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
+            )
+            numeric_id = str(numeric_id)
             
             print(f"Extracted numeric ID: {numeric_id} from building_id: {building_id}")
             print(f"Available building IDs in cache (first 5): {list(building_features.keys())[:5] if isinstance(building_features, dict) else 'N/A'}")
@@ -605,17 +600,11 @@ def get_building_features(building_id):
             print(f"Loaded features from joblib for building {building_id}: {len(features)} features")
             return jsonify({'building_id': building_id, 'features': features})
         
-        # Try to match by extracting numeric ID using regex (handle prefixes like "bag_", "NL.IMBAG.Pand.", etc.)
-        # Extract numeric part from building_id using regex (e.g., "bag_0518100000271783" -> "0518100000271783")
-        # Pattern: find a sequence of digits (10 or more digits for building IDs)
-        numeric_match = re.search(r'(\d{10,})', str(building_id))
-        if numeric_match:
-            numeric_id = numeric_match.group(1)
-        else:
-            # Fallback: try splitting by underscore
-            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
-        numeric_id = str(numeric_id)  # Ensure it's a string
-        
+        numeric_id = extract_numeric_id(building_id) or (
+            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
+        )
+        numeric_id = str(numeric_id)
+
         print(f"Extracted numeric ID: {numeric_id} from building_id: {building_id}")
         print(f"Available building IDs in joblib (first 5): {list(building_features.keys())[:5]}")
         print(f"Total buildings in joblib: {len(building_features)}")
@@ -838,29 +827,20 @@ def get_single_building(building_id):
             city_json = json.load(f)
         
         # Extract numeric ID for matching
-        numeric_match = re.search(r'(\d{10,})', str(building_id))
-        numeric_id = numeric_match.group(1) if numeric_match else building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = extract_numeric_id(building_id) or (
+            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
+        )
         numeric_id = str(numeric_id)
-        
+
         # Find the building in CityObjects
         target_building_id = None
         target_building = None
-        
+
         for obj_id, obj_data in city_json.get('CityObjects', {}).items():
-            # Try exact match
-            if obj_id == building_id or obj_id == numeric_id:
+            if obj_id == building_id or obj_id == numeric_id or numeric_ids_match(obj_id, numeric_id):
                 target_building_id = obj_id
                 target_building = obj_data
                 break
-            
-            # Try numeric match
-            obj_numeric_match = re.search(r'(\d{10,})', str(obj_id))
-            if obj_numeric_match:
-                obj_numeric = obj_numeric_match.group(1)
-                if obj_numeric == numeric_id:
-                    target_building_id = obj_id
-                    target_building = obj_data
-                    break
         
         if not target_building:
             return jsonify({'error': f'Building {building_id} not found in file {file_path}'}), 404
@@ -959,13 +939,9 @@ def find_building_file(building_id):
     Searches through Source A and Source B files
     """
     try:
-        import re
-        # Extract numeric ID from building_id
-        numeric_match = re.search(r'(\d{10,})', str(building_id))
-        if numeric_match:
-            numeric_id = numeric_match.group(1)
-        else:
-            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = extract_numeric_id(building_id) or (
+            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
+        )
         numeric_id = str(numeric_id)
 
         # Return cached result if available — file mappings never change at runtime
@@ -1017,22 +993,13 @@ def find_building_file(building_id):
                         data = json.load(f)
                         city_objects = data.get('CityObjects', {})
                         
-                        # Check if building ID exists in this file
-                        for obj_id, obj_data in city_objects.items():
-                            # Try exact match
-                            if obj_id == building_id or obj_id == numeric_id:
+                        # Check if building ID exists in this file (exact or numeric variant match)
+                        for obj_id in city_objects:
+                            if (obj_id == building_id or obj_id == numeric_id
+                                    or numeric_ids_match(obj_id, numeric_id)):
                                 rel_path = file_path.relative_to(DATA_DIR)
-                                print(f"Found building {building_id} in {rel_path} (exact match)")
+                                print(f"Found building {building_id} in {rel_path}")
                                 return str(rel_path)
-                            
-                            # Try numeric match
-                            obj_numeric_match = re.search(r'(\d{10,})', str(obj_id))
-                            if obj_numeric_match:
-                                obj_numeric = obj_numeric_match.group(1)
-                                if obj_numeric == numeric_id:
-                                    rel_path = file_path.relative_to(DATA_DIR)
-                                    print(f"Found building {building_id} in {rel_path} (numeric match)")
-                                    return str(rel_path)
                 except Exception as e:
                     print(f"Error reading file {file_path}: {e}")
                     continue
@@ -1099,15 +1066,11 @@ def get_building_bkafi(building_id):
                     'pairs': []
                 }), 404
         
-        # Extract numeric ID from building_id (handle prefixes like "bag_")
-        import re
-        numeric_match = re.search(r'(\d{10,})', str(building_id))
-        if numeric_match:
-            numeric_id = numeric_match.group(1)
-        else:
-            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = extract_numeric_id(building_id) or (
+            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
+        )
         numeric_id = str(numeric_id)
-        
+
         print(f"Looking for pairs for candidate building: {numeric_id}")
         
         # Lookup candidate building in dictionary (try exact match first)
@@ -1203,15 +1166,11 @@ def get_building_matches(building_id):
                     'matches': []
                 }), 404
         
-        # Extract numeric ID from building_id
-        import re
-        numeric_match = re.search(r'(\d{10,})', str(building_id))
-        if numeric_match:
-            numeric_id = numeric_match.group(1)
-        else:
-            numeric_id = building_id.split('_')[-1] if '_' in building_id else str(building_id)
+        numeric_id = extract_numeric_id(building_id) or (
+            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
+        )
         numeric_id = str(numeric_id)
-        
+
         # Lookup candidate building in dictionary
         building_data = bkafi_cache_local.get(numeric_id)
         
@@ -1310,9 +1269,9 @@ def get_all_buildings_status():
                 bid_str = str(candidate_id)
                 has_pairs.add(bid_str)
                 # Also add numeric version for matching
-                numeric_match = re.search(r'(\d{10,})', bid_str)
-                if numeric_match:
-                    has_pairs.add(numeric_match.group(1))
+                bid_numeric = extract_numeric_id(bid_str)
+                if bid_numeric:
+                    has_pairs.add(bid_numeric)
         
         # 3. Check match status (true match, false positive, no match)
         # For each building, check all its pairs to determine overall status
@@ -1362,9 +1321,8 @@ def get_all_buildings_status():
                     status = None  # No pairs at all - keep previous stage color
                 
                 # Store for both full ID and numeric ID
-                numeric_match = re.search(r'(\d{10,})', source_id_str)
-                numeric_id = numeric_match.group(1) if numeric_match else None
-                
+                numeric_id = extract_numeric_id(source_id_str)
+
                 if status:
                     match_status[source_id_str] = status
                     if numeric_id:
