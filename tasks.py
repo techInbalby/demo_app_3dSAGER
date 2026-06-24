@@ -316,12 +316,9 @@ def _bridge_to_legacy(cache_dir: Path, cands_path: str, target_stage: str) -> No
         _cache_set_json('bkafi:by_file', {cands_basename: bkafi_flat})
         touched_redis = True
 
-    # Bump the cross-process invalidation stamp so the gunicorn workers (which
-    # live in a different process from this Celery worker and so can't be
-    # signaled directly) drop their in-memory `_buildings_status_cache` on the
-    # next request.
-    if touched_redis:
-        _cache_set_json('buildings_status:stamp', time.time())
+    # (No stamp bump needed — the in-process buildings-status cache was
+    # removed; every request now reads bkafi:flat from Redis fresh.)
+    _ = touched_redis  # kept above for readability; intentionally unused now
 
 
 def _transpose_property_dict(property_dict: dict) -> dict:
