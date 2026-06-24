@@ -276,6 +276,9 @@
     <script src="{{ url_for('static', filename='js/three-building-viewer.js') }}"></script>
     <!-- Generic Celery-task poller used by Steps 1-4 -->
     <script src="{{ url_for('static', filename='js/pipeline_runner.js') }}"></script>
+    <!-- Phase 2 modules — must load BEFORE demo.js so their window.* exports
+         are in place by the time demo.js init runs. -->
+    <script src="{{ url_for('static', filename='js/building-colors.js') }}"></script>
     <script src="{{ url_for('static', filename='js/demo.js') }}"></script>
     <!-- Step 4 (Spatial Alignment) controller -->
     <script src="{{ url_for('static', filename='js/alignment.js') }}"></script>
