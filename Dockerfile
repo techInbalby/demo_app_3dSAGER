@@ -39,6 +39,7 @@ COPY deploy/ deploy/
 # New live-pipeline packages and the standalone inference bundle.
 COPY pipeline/                pipeline/
 COPY align_api/              align_api/
+COPY lib/                    lib/
 COPY demo_infrance_pipeline/  demo_infrance_pipeline/
 
 # Copy scripts
