@@ -98,6 +98,16 @@ def slice_cand_from_post_disaster(cache_dir: Optional[Path], cand_id) -> Optiona
     # Build the index remap + the trimmed vertices array.
     old_to_new = {old: new for new, old in enumerate(sorted(referenced))}
     new_verts = [all_verts[old] for old in sorted(referenced)]
+    # Shift z so the building base sits at z=0. post_disaster_cands.json
+    # stores absolute EPSG:7415 coords (z ~40–50 m NAP). The pristine +
+    # index paths feed CityJSON with a transform block the three.js viewer
+    # applies, ending up near z=0; without this shift the post-disaster
+    # cand floats above the scene's z=0 grid plane while everything else
+    # rests on it. Relative heights inside the building (the damage shape)
+    # are preserved.
+    if new_verts:
+        min_z = min(v[2] for v in new_verts)
+        new_verts = [[v[0], v[1], v[2] - min_z] for v in new_verts]
 
     # Rewrite the geometry with remapped indices.
     def _remap(node):
