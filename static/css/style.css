@@ -589,3 +589,59 @@ p {
   background: var(--surface-muted);
   color: var(--muted);
 }
+
+/* ── Tunable Parameters section (between Pipeline and CTA) ──────────────── */
+.parameters-section { padding: 4rem 0; background: #f7f9ff; }
+.parameters-intro {
+  max-width: 640px;
+  margin: 0 auto 2rem;
+  color: #555;
+}
+.parameters-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-top: 1.5rem;
+}
+.parameter-card {
+  position: relative;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  padding: 1.5rem 1.5rem 1.25rem;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+.parameter-card h3 {
+  margin: 0.25rem 0 0.35rem;
+  font-size: 1.05rem;
+  color: #1e293b;
+}
+.parameter-card p { margin: 0.4rem 0; line-height: 1.5; color: #475569; font-size: 0.95rem; }
+.parameter-default { color: #64748b; font-size: 0.85rem; }
+.parameter-effect {
+  margin-top: 0.7rem !important;
+  padding: 0.55rem 0.75rem;
+  background: #fff8e1;
+  border-left: 3px solid #d4a017;
+  border-radius: 4px;
+  font-size: 0.9rem;
+  color: #6b5510;
+}
+.parameter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #4a8bff, #6c5ce7);
+  color: #fff;
+  font-weight: 700;
+  font-size: 1.1rem;
+  font-style: italic;
+  margin-bottom: 0.6rem;
+}
+
+@media (max-width: 768px) {
+  .parameters-grid { grid-template-columns: 1fr; }
+}

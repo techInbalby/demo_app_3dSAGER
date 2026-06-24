@@ -18,6 +18,7 @@
                 <ul class="nav-links">
                     <li><a href="#features">Features</a></li>
                     <li><a href="#pipeline">Pipeline</a></li>
+                    <li><a href="#parameters">Tune</a></li>
                     <li><a href="/demo" class="btn btn-primary">Try Demo</a></li>
                 </ul>
             </div>
@@ -117,8 +118,35 @@
                         <div class="pipeline-stage-text">
                             <h4>GeoSpatial Alignment</h4>
                             <p>From the high-confidence matches in step 3, the system recovers the rigid transform between the two datasets' coordinate frames via RANSAC. With the alignment in hand, every candidate is rematched to its nearest neighbour in the index in post-alignment coordinates. This spatial pass recovers matches that geometric similarity alone missed, lifting end-to-end recall well above what the blocking step can deliver on its own.</p>
-                            <p><em>The cutoff distance (default 7 m) and the BKAFI neighbour count K (default 30) are both adjustable from the demo's sidebar — tightening the cutoff trades recall for precision; lowering K shrinks the BKAFI pool feeding RANSAC.</em></p>
                         </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Tunable Parameters Section -->
+    <section id="parameters" class="parameters-section">
+        <div class="container">
+            <div class="card">
+                <h2 class="text-center mb-2">Tune the Pipeline</h2>
+                <p class="text-center parameters-intro">
+                    Two parameters are exposed in the demo's sidebar so you can explore the precision/recall trade-off live.
+                </p>
+                <div class="parameters-grid">
+                    <div class="parameter-card">
+                        <div class="parameter-badge">K</div>
+                        <h3>BKAFI Neighbour Count</h3>
+                        <p class="parameter-default">Default: <strong>30</strong> · Range: 1 – 100</p>
+                        <p>How many index buildings each candidate's BKAFI pool keeps. Larger pools give the classifier more chances to find the true match; smaller pools yield cleaner anchors for the RANSAC alignment step.</p>
+                        <p class="parameter-effect"><strong>Lowering K</strong> shrinks the pool feeding RANSAC — often improves alignment quality at the cost of classifier recall on individual pairs.</p>
+                    </div>
+                    <div class="parameter-card">
+                        <div class="parameter-badge">d</div>
+                        <h3>Cutoff Distance</h3>
+                        <p class="parameter-default">Default: <strong>7 m</strong> · Range: 0.5 – 100 m</p>
+                        <p>After alignment, each candidate's nearest index building must lie within this distance to count as a confirmed match. Anything beyond the cutoff is flagged "too far".</p>
+                        <p class="parameter-effect"><strong>Tightening the cutoff</strong> trades recall for precision — fewer matches confirmed, but the ones that are confirmed are spatially tight.</p>
                     </div>
                 </div>
             </div>
