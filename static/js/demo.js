@@ -2374,6 +2374,9 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
         if (old) old.remove();
         const oldNote = document.getElementById('cand-damage-note');
         if (oldNote) oldNote.remove();
+        // Always clear any prior spacer on the right; we re-insert below.
+        const oldSpacer = document.getElementById('cand-geom-toggle-spacer');
+        if (oldSpacer) oldSpacer.remove();
         if (step4Done) {
             const toggleRow = document.createElement('div');
             toggleRow.id = 'cand-geom-toggle';
@@ -2385,6 +2388,21 @@ function openBkafiComparisonWindow(candidateBuildingId, pairs) {
             `;
             candidateViewerEl.parentNode.insertBefore(toggleRow, candidateViewerEl);
             candidateViewerEl.parentNode.insertBefore(damageNoteEl, candidateViewerEl.nextSibling);
+            // Mirror the toggle's vertical footprint on the right column so the
+            // two 3D viewers start at the same Y. The spacer copies the toggle
+            // row's margin so spacing matches exactly.
+            if (pairsViewersEl && pairsViewersEl.parentNode) {
+                const spacer = document.createElement('div');
+                spacer.id = 'cand-geom-toggle-spacer';
+                spacer.className = 'cand-geom-toggle';
+                spacer.setAttribute('aria-hidden', 'true');
+                spacer.style.visibility = 'hidden';
+                spacer.innerHTML = `
+                    <span class="cand-geom-label">&nbsp;</span>
+                    <button type="button" class="cand-geom-btn">&nbsp;</button>
+                `;
+                pairsViewersEl.parentNode.insertBefore(spacer, pairsViewersEl);
+            }
             toggleRow.querySelectorAll('.cand-geom-btn').forEach(btn => {
                 btn.addEventListener('click', async () => {
                     if (btn.classList.contains('active')) return;
