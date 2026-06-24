@@ -79,8 +79,8 @@ def alignment_matches_summary():
 @alignment_bp.route('/cityjson', methods=['GET'])
 def alignment_cityjson():
     stage = request.args.get('stage', '').lower()
-    if stage not in ('misaligned', 'aligned'):
-        return jsonify(error="stage must be 'misaligned' or 'aligned'"), 400
+    if stage not in ('misaligned', 'aligned', 'damaged_heights'):
+        return jsonify(error="stage must be 'misaligned', 'aligned', or 'damaged_heights'"), 400
     cache_dir = loaders.current_cache_dir()
     path = loaders.cityjson_path(stage, cache_dir=cache_dir)
     if path is None:

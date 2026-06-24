@@ -166,8 +166,9 @@ def cityjson_path(stage: str, seed: int = 1,
     """
     cache_dir = cache_dir or current_cache_dir()
     stems = {
-        'misaligned': 'post_disaster_cands',
-        'aligned':    f'aligned_candidates_seed{seed}',
+        'misaligned':      'post_disaster_cands',
+        'aligned':         f'aligned_candidates_seed{seed}',
+        'damaged_heights': 'damaged_heights_only_cands',
     }
     if stage not in stems:
         return None

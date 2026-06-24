@@ -221,21 +221,26 @@ def pipeline_run(self, target_stage, cands_path, index_path, input_hash,
         progress_cb=progress_cb,
     )
 
-    # Pre-bake the alignment-stage CityJSON outputs so the viewer's WGS84
-    # fast-path is ready when the frontend asks for them.
+    # Pre-bake CityJSON outputs so the viewer's WGS84 fast-path is ready when
+    # the frontend asks for them. `damaged_heights_only_cands.json` is written
+    # by stage_preprocess, so we prebake it regardless of target_stage; the
+    # alignment outputs only exist after stage_align.
+    progress_cb(target_stage, 'pre-baking CityJSON outputs')
+    prebake_stubs = ['damaged_heights_only_cands.json']
     if target_stage == 'align':
-        progress_cb('align', 'pre-baking aligned CityJSON outputs')
-        for stub in [
-            'post_disaster_cands.json',
-            f'aligned_candidates_seed{seed}.json',
-        ]:
-            p = cache_dir / stub
-            if p.exists():
-                try:
-                    prebake_cityjson.prebake_file(p)
-                except Exception as e:
-                    # Don't fail the whole run if prebake fails — viewer can fall back to raw.
-                    print(f"[pipeline_run] prebake of {p.name} failed: {e}")
+        prebake_stubs += ['post_disaster_cands.json', f'aligned_candidates_seed{seed}.json']
+    for stub in prebake_stubs:
+        p = cache_dir / stub
+        if p.exists():
+            prebaked = p.with_suffix('').with_suffix('.prebaked.json')
+            # Skip if prebaked is up to date.
+            if prebaked.exists() and prebaked.stat().st_mtime >= p.stat().st_mtime:
+                continue
+            try:
+                prebake_cityjson.prebake_file(p)
+            except Exception as e:
+                # Don't fail the whole run if prebake fails — viewer can fall back to raw.
+                print(f"[pipeline_run] prebake of {p.name} failed: {e}")
 
     # Bridge new-pipeline outputs to the legacy demo's Redis + JSON consumers
     # so the existing /api/building/*, /api/buildings/status,

@@ -779,13 +779,25 @@ const SOURCE_COLORS = {
  * This handles the race between DOMContentLoaded (which fires loadDataFiles)
  * and the Cesium viewer's async initialisation (setTimeout polling for Cesium).
  */
+// When Source A has been through Step 1, the worker has written a heights-only
+// damaged CityJSON to results_demo/cache/<hash>/. The viewer should load THAT
+// instead of the pristine file so users see the same z-axis damage the pipeline
+// saw (without the CRS rotation/translation, which would put cands offscreen).
+function _sourceALoadOptions(filePath, source) {
+    const base = { append: true, source };
+    if (source === 'A' && window.pipelineState && window.pipelineState.step1Completed) {
+        base.url = '/api/alignment/cityjson?stage=damaged_heights';
+    }
+    return base;
+}
+
 function waitForViewerThenLoad(filePath, source, attempts) {
     attempts = attempts || 0;
     // Must wait for BOTH the viewer object AND its async init() to complete (isInitialized).
     // Without the isInitialized check, loadCityJSON returns early with an error when
     // the Cesium Ion imagery await is still in flight.
     if (window.viewer && window.viewer.isInitialized && window.viewer.loadCityJSON) {
-        window.viewer.loadCityJSON(filePath, { append: true, source });
+        window.viewer.loadCityJSON(filePath, _sourceALoadOptions(filePath, source));
     } else if (attempts < 60) {
         // Retry up to ~18 s (60 × 300 ms) while Cesium finishes initialising
         setTimeout(() => waitForViewerThenLoad(filePath, source, attempts + 1), 300);
@@ -793,6 +805,21 @@ function waitForViewerThenLoad(filePath, source, attempts) {
         console.warn('Viewer never became ready for', filePath);
     }
 }
+
+// Reload the active Source A layer with the heights-only damaged variant.
+// Called after Step 1 completes so the viewer immediately reflects the damage.
+function reloadSourceAAsDamaged() {
+    if (!window.viewer || !window.viewer.loadCityJSON) return;
+    const allA = (allAvailableFiles && allAvailableFiles.A) || [];
+    allA.forEach((file) => {
+        const fp = file.path;
+        const state = layerState[fp] || {};
+        if (state.visible) {
+            window.viewer.loadCityJSON(fp, _sourceALoadOptions(fp, 'A'));
+        }
+    });
+}
+window.reloadSourceAAsDamaged = reloadSourceAAsDamaged;
 
 function toggleLayer(filePath, source, shouldShow) {
     layerState[filePath] = {
@@ -1691,6 +1718,11 @@ function calculateGeometricFeatures() {
             stepBtn.style.background = '#28a745';
             // Advance tutorial only after the UI is ready (button enabled, colors updating)
             advanceTutorialForPipelineAction('calculateFeatures');
+            // Swap Source A in the Cesium viewer to the heights-only damaged
+            // CityJSON the worker wrote during preprocess. Same geometry the
+            // pipeline saw (z-axis damage) but at original CRS coords so it
+            // overlays the Index layer.
+            reloadSourceAAsDamaged();
             updateBuildingColorsForStage1(true, function () {
                 clearSafety();
                 hideLoading();

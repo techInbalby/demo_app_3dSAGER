@@ -152,7 +152,11 @@ def stage_preprocess(cache_dir: Path, cands_path: str, index_path: str,
       - disaster_log.json         (R_crs, t_crs, damage_log — only if disaster applied)
     """
     out_path = Path(cache_dir) / "object_dict.joblib"
-    if out_path.exists():
+    heights_only_path = Path(cache_dir) / "damaged_heights_only_cands.json"
+    # Cache hit ONLY if both object_dict.joblib AND the heights-only CityJSON
+    # exist. Older caches predate the heights-only writer; treat them as a miss
+    # so the file gets generated on the next run.
+    if out_path.exists() and (heights_only_path.exists() or not apply_disaster):
         _record_stage(cache_dir, 'preprocess', 0.0, cache_hit=True)
         return joblib.load(out_path)
 
@@ -168,6 +172,13 @@ def stage_preprocess(cache_dir: Path, cands_path: str, index_path: str,
 
     if apply_disaster:
         if progress_cb: progress_cb('preprocess', 'applying DisasterSimulator')
+        # Snapshot pristine cands BEFORE the simulator mutates them in place,
+        # so we can write a "heights only" damaged CityJSON for the Cesium
+        # viewer (same z damage, but no CRS rotation/translation — buildings
+        # stay at their real geographic positions for overlay with the Index).
+        from copy import deepcopy
+        pristine_cands = deepcopy(object_dict.get('cands', {}))
+
         simulator = DisasterSimulator(config.DisasterSimulation, seed=seed)
         object_dict = simulator.apply(object_dict)
         # Persist the ground-truth transform + damage log so stage_align can
@@ -180,6 +191,24 @@ def stage_preprocess(cache_dir: Path, cands_path: str, index_path: str,
         _atomic_write_json(disaster_log, Path(cache_dir) / "disaster_log.json")
         # Re-save the (now-mutated) object_dict.
         joblib.dump(object_dict, out_path, compress=3)
+
+        # --- Heights-only damaged Source A CityJSON (no R/t) ---
+        # Apply each cand's damage_factor to its pristine geometry. Same
+        # _damage_building helper the simulator uses internally, so the
+        # resulting z values match the pipeline's post-disaster heights
+        # exactly. Output stays in the input CRS (no translation/rotation),
+        # so the Cesium viewer renders it overlaying the Index layer.
+        if progress_cb: progress_cb('preprocess', 'writing heights-only damaged snapshot')
+        for bid, factor in simulator.damage_log.items():
+            if bid in pristine_cands:
+                simulator._damage_building(pristine_cands[bid], float(factor))
+        from alignment import write_cands_cityjson
+        write_cands_cityjson(
+            pristine_cands,
+            out_path=Path(cache_dir) / "damaged_heights_only_cands.json",
+            output_crs=config.Alignment.output_crs,
+            alignment_info=None,
+        )
 
     _record_stage(cache_dir, 'preprocess', time.time() - t0, cache_hit=False,
                   n_cands=len(object_dict.get('cands', {})),
