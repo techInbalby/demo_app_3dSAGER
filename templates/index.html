@@ -117,6 +117,7 @@
                         <div class="pipeline-stage-text">
                             <h4>GeoSpatial Alignment</h4>
                             <p>From the high-confidence matches in step 3, the system recovers the rigid transform between the two datasets' coordinate frames via RANSAC. With the alignment in hand, every candidate is rematched to its nearest neighbour in the index in post-alignment coordinates. This spatial pass recovers matches that geometric similarity alone missed, lifting end-to-end recall well above what the blocking step can deliver on its own.</p>
+                            <p><em>The cutoff distance (default 7 m) and the BKAFI neighbour count K (default 30) are both adjustable from the demo's sidebar — tightening the cutoff trades recall for precision; lowering K shrinks the BKAFI pool feeding RANSAC.</em></p>
                         </div>
                     </div>
                 </div>

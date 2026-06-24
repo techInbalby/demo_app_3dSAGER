@@ -3126,3 +3126,17 @@ body.mobile-panel-open {
     color: #b45309;
     font-style: italic;
 }
+
+/* ── Sub-hint inside tutorial step list items (K, cutoff) ─────────────── */
+.tutorial-step-list li .tutorial-step-hint {
+    display: block;
+    margin-top: 4px;
+    padding: 4px 8px;
+    background: #fff8e1;
+    border-left: 3px solid #d4a017;
+    border-radius: 3px;
+    color: #6b5510;
+    font-size: 12px;
+    line-height: 1.4;
+    font-style: italic;
+}

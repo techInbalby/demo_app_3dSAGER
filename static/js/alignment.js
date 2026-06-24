@@ -84,13 +84,14 @@
     const ai = info && info.alignment_info ? info.alignment_info : null;
     const mr = ai && ai.mean_residual_m != null ? ai.mean_residual_m.toFixed(2) + ' m' : 'n/a';
     const np = ai && ai.n_anchor_pairs    != null ? ai.n_anchor_pairs : 'n/a';
+    const co = ai && ai.cutoff_m          != null ? ai.cutoff_m + ' m' : 'n/a';
 
     let metricsHtml = '';
     if (metrics && metrics.at_match_threshold) {
       const m = metrics.at_match_threshold;
       metricsHtml =
         `<div style="margin-top:6px;">` +
-        `At threshold <strong>${m.threshold}</strong>: ` +
+        `At matcher threshold <strong>${m.threshold}</strong>: ` +
         `P=<strong>${m.precision}</strong> · R=<strong>${m.recall}</strong> · F1=<strong>${m.f1}</strong><br>` +
         `TP=<strong>${m.tp}</strong> · FP=<strong>${m.fp}</strong> · FN=<strong>${m.fn}</strong>` +
         `</div>`;
@@ -101,7 +102,8 @@
     _setInfoCard(
       `<strong>Geospatial alignment — results</strong><br>` +
       `Mean residual: <strong>${mr}</strong> · ` +
-      `potential anchors: <strong>${np}</strong>` +
+      `potential anchors: <strong>${np}</strong> · ` +
+      `cutoff: <strong>${co}</strong>` +
       metricsHtml
     );
   }

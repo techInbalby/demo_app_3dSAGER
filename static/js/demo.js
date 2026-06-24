@@ -72,6 +72,7 @@ const tutorialSteps = [
                     <li>
                         <strong>2 — Geometric Blocking</strong>
                         <span>Shortlist a few likely index buildings per candidate via BKAFI nearest-neighbour search.</span>
+                        <span class="tutorial-step-hint">Adjust <strong>K</strong> below the button to make the pool larger (better recall) or smaller (cleaner anchors for alignment). Changing K re-runs Steps 3 + 4.</span>
                     </li>
                     <li>
                         <strong>3 — Match Classification</strong>
@@ -80,6 +81,7 @@ const tutorialSteps = [
                     <li>
                         <strong>4 — GeoSpatial Alignment</strong>
                         <span>Recover the rigid transform from the high-confidence matches and re-block spatially. Headline P / R / F1 appear in the sidebar after this stage.</span>
+                        <span class="tutorial-step-hint">Adjust the <strong>cutoff distance</strong> below the button — only nearest matches within this distance count as confirmed. Tightening the cutoff trades recall for precision.</span>
                     </li>
                 </ol>
                 <p class="tutorial-hint">Buildings recolour after each stage; the legend on the right of the viewer updates to show what each colour means.</p>
@@ -1938,6 +1940,28 @@ function runBKAFI() {
         if (selectedBuildingId) {
             loadBuildingBkafiPairs(selectedBuildingId);
         }
+
+        // If blocking just recomputed with a new K, the downstream classify+align
+        // outputs were invalidated server-side (see
+        // pipeline_stages._invalidate_downstream_of_blocking). Detect that by
+        // checking the manifest — if 'classify' no longer has a complete entry,
+        // reset Step 3 + Step 4 so the user knows to re-click them.
+        fetch('/api/pipeline/manifest').then(r => r.ok ? r.json() : null).then(m => {
+            if (!m || !m.stages) return;
+            const classifyStale = !m.stages.classify || !m.stages.classify.complete;
+            if (classifyStale && pipelineState.step3Completed) {
+                console.log('[runBKAFI] downstream invalidated — resetting Step 3 + Step 4');
+                pipelineState.step3Completed = false;
+                pipelineState.step4Completed = false;
+                const s3 = document.getElementById('step-btn-3');
+                if (s3) { s3.textContent = 'Run Classifier'; s3.style.background = ''; s3.disabled = false; }
+                if (window.AlignmentStep && typeof window.AlignmentStep.reset === 'function') {
+                    window.AlignmentStep.reset();
+                }
+                updatePipelineUI();
+                updateViewerLegend();
+            }
+        }).catch(() => { /* network hiccup — ignore */ });
     };
 
     const handleBkafiError = (errorMessage) => {
@@ -2141,7 +2165,10 @@ async function _fetchBuildingDataForComparison(buildingId) {
 // pipeline ran on (rotated + translated + height-damaged). Available only
 // after Step 4 runs.
 async function _fetchCandPostDisasterGeometry(buildingId) {
-    const numericId = String(buildingId).replace(/^[^_]*_/, '');
+    // Extract the 10+ digit numeric BAG id from whatever form the viewer uses
+    // (works for "bag_<id>", "NL.IMBAG.Pand.<id>-0", and raw "<id>").
+    const m = String(buildingId).match(/(\d{10,})/);
+    const numericId = m ? m[1] : String(buildingId);
     const r = await fetch(`/api/alignment/cand/${encodeURIComponent(numericId)}/cityjson?stage=post_disaster`);
     if (!r.ok) {
         let detail; try { detail = (await r.json()).error || r.statusText; } catch { detail = r.statusText; }

@@ -143,7 +143,10 @@ def alignment_cand(cand_id):
         'in_blocking_pool':    in_pool,
         'alignment_succeeded': bool(info.get('alignment_succeeded')),
         'match_threshold':     info.get('match_threshold'),
-        'cutoff_m':            7.0,   # config.Alignment.post_align_knn_cutoff (mirrored for UI labelling)
+        # Read the cutoff that was actually used (persisted to alignment_info.json
+        # by stage_align). Falls back to the upstream default only if the field
+        # is missing on an old cache.
+        'cutoff_m':            info.get('cutoff_m', 7.0),
     })
 
 
