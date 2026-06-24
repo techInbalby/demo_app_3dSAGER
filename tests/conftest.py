@@ -49,13 +49,33 @@ def cache_root():
 
 @pytest.fixture(scope='session')
 def warm_cache_dir(cache_root):
-    """The first per-input-hash subdir under cache_root, or skip if empty.
-
-    The demo writes exactly one cache_dir for the locked Source A/B inputs;
-    tests that need cached outputs read from this dir."""
+    """The most-recently-written cache_dir that's also for the current
+    CONFIG_VERSION (i.e. matches the hash from compute_input_hash on the
+    locked inputs). Older runs from a prior CONFIG_VERSION are skipped so
+    tests don't pick up a stale dir that's missing newer artifacts."""
     if not cache_root.exists():
         pytest.skip(f"warm cache root missing: {cache_root}")
-    subdirs = [p for p in cache_root.iterdir() if p.is_dir() and (p / 'object_dict.joblib').exists()]
+    # Prefer the cache_dir that matches the current input_hash. Falls back
+    # to the newest dir if compute_input_hash can't be imported (e.g. on a
+    # minimal test env).
+    target = None
+    try:
+        from tests.conftest import REPO_ROOT  # type: ignore  # self-ref ok
+        import pipeline_stages
+        cands = REPO_ROOT / 'data' / 'source_a' / '10-248-580.city.json'
+        index = REPO_ROOT / 'data' / 'source_b' / 'TheHague3D_Batch_07_Loosduinen_2022-08-08.json'
+        if cands.exists() and index.exists():
+            target = cache_root / pipeline_stages.compute_input_hash(str(cands), str(index))
+    except Exception:
+        target = None
+    if target and target.exists() and (target / 'object_dict.joblib').exists():
+        return target
+
+    subdirs = sorted(
+        [p for p in cache_root.iterdir() if p.is_dir() and (p / 'object_dict.joblib').exists()],
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )
     if not subdirs:
         pytest.skip("no warm cache dir under results_demo/cache/ — run the pipeline first")
     return subdirs[0]
@@ -79,10 +99,18 @@ def locked_inputs(repo_root):
 
 @pytest.fixture(scope='session', autouse=True)
 def _celery_eager():
-    """Run Celery tasks inline. Applied once for the whole session."""
-    # Import here so the env var below takes effect first.
+    """Run Celery tasks inline. Applied once for the whole session.
+
+    Heavy dependencies (numpy, joblib, faiss…) get imported transitively
+    via `import tasks`. UI tests run in a Playwright container that lacks
+    those deps; in that env we skip the eager-config silently — UI tests
+    drive the live demo over HTTP and don't need Celery at all."""
     os.environ.setdefault('REDIS_URL', 'redis://fake')
-    import tasks as tasks_module  # noqa: E402
+    try:
+        import tasks as tasks_module  # noqa: E402
+    except ImportError:
+        yield None
+        return
     tasks_module.celery.conf.update(
         task_always_eager=True,
         task_eager_propagates=True,

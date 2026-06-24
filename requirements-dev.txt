@@ -13,7 +13,7 @@ fakeredis==2.26.1
 # Coverage reporting
 pytest-cov==6.0.0
 
-# Browser-driven UI tests. Install the browser separately with:
-#   playwright install chromium
-pytest-playwright==0.6.2
-playwright==1.49.1
+# Browser-driven UI tests. The version pin must match the playwright docker
+# image used by scripts/run-ui-tests.sh (mcr.microsoft.com/playwright/python).
+pytest-playwright==0.7.1
+playwright==1.60.0
