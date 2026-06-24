@@ -608,10 +608,10 @@ body {
     text-overflow: ellipsis;
     white-space: nowrap;
     font-size: 11px;
-    color: #444;
+    color: #000;
     min-width: 0;
 }
-.legend-row-active .legend-layer-name { color: #667eea; font-weight: 600; }
+.legend-row-active .legend-layer-name { color: #000; font-weight: 600; }
 
 /* "active" badge shown next to active Source-A layer */
 .legend-active-tag {
