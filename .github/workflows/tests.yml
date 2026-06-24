@@ -1,0 +1,73 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Fast tests on every PR. The integration + ui suites are slow and depend on
+# a running docker stack — left for a separate manually-triggered workflow.
+jobs:
+  unit-and-api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build worker image (cached)
+        run: docker compose build worker
+
+      - name: Start redis (only dep needed for non-integration tests)
+        run: docker compose up -d redis
+
+      - name: Wait for redis
+        run: |
+          for i in {1..20}; do
+            if docker compose exec -T redis redis-cli ping >/dev/null 2>&1; then
+              echo "redis up"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "redis never came up" >&2
+          docker compose logs redis
+          exit 1
+
+      - name: Run unit + API tests
+        run: scripts/run-tests.sh -v
+
+      - name: Stop redis
+        if: always()
+        run: docker compose down -v
+
+  # Manually-triggered slow tests. Integration runs the pipeline live (~30 s);
+  # UI brings up the demo + drives a headless browser (~2 min).
+  full-suite:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build + start full stack
+        run: docker compose up -d --build
+
+      - name: Wait for web
+        run: |
+          for i in {1..60}; do
+            if curl -fs -o /dev/null http://localhost:5000/health; then
+              echo "web up"
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose logs --tail=200
+          exit 1
+
+      - name: Run integration suite
+        run: scripts/run-tests.sh -m integration -v
+
+      - name: Run UI suite
+        run: scripts/run-ui-tests.sh -v
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

@@ -1,0 +1,19 @@
+# Development + test dependencies. Not installed in the production
+# Docker images (web / worker); intended for the local test harness only.
+
+# Test runner + Flask integration
+pytest==8.3.4
+pytest-flask==1.3.0
+pytest-mock==3.14.0
+
+# Run Celery tasks inline in tests (no real worker / broker needed).
+# fakeredis backs the redis client when REDIS_URL points to redis://fake
+fakeredis==2.26.1
+
+# Coverage reporting
+pytest-cov==6.0.0
+
+# Browser-driven UI tests. The version pin must match the playwright docker
+# image used by scripts/run-ui-tests.sh (mcr.microsoft.com/playwright/python).
+pytest-playwright==0.7.1
+playwright==1.60.0
