@@ -45,7 +45,7 @@ def parse_args():
                    help='After RANSAC alignment is accepted, replace the BKAFI candidate pool with '
                         'per-cand 1-NN against the full index in post-alignment coordinates. Lifts '
                         'blocking recall from ~47%% (BKAFI) to ~100%% on the demo. Accept distance '
-                        'cutoff comes from config.Alignment.post_align_knn_cutoff (default 7 m).')
+                        'cutoff comes from config.Alignment.post_align_knn_cutoff (default 10 m).')
     p.add_argument('--match-threshold', type=float, default=None,
                    help=f'Score threshold for predicted_match in matches.csv. Default '
                         f'{DEFAULT_MATCH_THRESHOLD} in hybrid mode (Gaussian spatial σ=3 m + α=0.3) '

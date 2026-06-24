@@ -215,7 +215,7 @@ def stage_blocking(cache_dir: Path, nn_count: int = None,
                    progress_cb=None) -> List[Tuple[str, str]]:
     """Run BKAFI blocking. Writes blocking_pairs.joblib (list of (cand_id, index_id)).
 
-    `nn_count` overrides config_demo's DEMO_NN_COUNT (default 30). When the
+    `nn_count` overrides config_demo's DEMO_NN_COUNT (default 5). When the
     requested value differs from the value cached in manifest.json, this stage
     recomputes AND deletes downstream stage outputs (scored_pairs + align)
     since they depend on the blocking output.

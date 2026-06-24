@@ -102,7 +102,7 @@ class Alignment:
     spatial_sigma = 3.0           # meters — Gaussian decay length for post-alignment spatial score.
                                   # spatial(d) = exp(-d²/(2·σ²)). σ ≈ median true-match residual;
                                   # σ=3 m gives spatial(0)=1, spatial(3)=0.61, spatial(10)≈0.004.
-    post_align_knn_cutoff = 7.0   # meters — for --post-align-blocking mode in demo/inference.py.
+    post_align_knn_cutoff = 10.0  # meters — for --post-align-blocking mode in demo/inference.py.
                                   # After alignment succeeds, replace BKAFI pool with per-cand 1-NN
                                   # against full index; accept iff post-alignment distance ≤ cutoff.
 

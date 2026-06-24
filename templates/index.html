@@ -136,14 +136,14 @@
                     <div class="parameter-card">
                         <div class="parameter-badge">K</div>
                         <h3>BKAFI Neighbour Count</h3>
-                        <p class="parameter-default">Default: <strong>30</strong> · Range: 1 – 100</p>
+                        <p class="parameter-default">Default: <strong>5</strong> · Range: 1 – 100</p>
                         <p>How many index buildings each candidate's BKAFI pool keeps. Larger pools give the classifier more chances to find the true match; smaller pools yield cleaner anchors for the RANSAC alignment step.</p>
                         <p class="parameter-effect"><strong>Lowering K</strong> shrinks the pool feeding RANSAC — often improves alignment quality at the cost of classifier recall on individual pairs.</p>
                     </div>
                     <div class="parameter-card">
                         <div class="parameter-badge">d</div>
                         <h3>Cutoff Distance</h3>
-                        <p class="parameter-default">Default: <strong>7 m</strong> · Range: 0.5 – 100 m</p>
+                        <p class="parameter-default">Default: <strong>10 m</strong> · Range: 0.5 – 100 m</p>
                         <p>After alignment, each candidate's nearest index building must lie within this distance to count as a confirmed match. Anything beyond the cutoff is flagged "too far".</p>
                         <p class="parameter-effect"><strong>Tightening the cutoff</strong> trades recall for precision — fewer matches confirmed, but the ones that are confirmed are spatially tight.</p>
                     </div>

@@ -1572,7 +1572,7 @@ function renderBuildingAlignmentCallout(payload) {
     const d        = nn.distance_m;
     const dNum     = (d != null && !Number.isNaN(d)) ? Number(d) : null;
     const dTxt     = (dNum != null) ? `${dNum.toFixed(2)} m` : 'n/a';
-    const cutoff   = payload.cutoff_m || 7.0;
+    const cutoff   = payload.cutoff_m || 10.0;
     const inPool   = !!payload.in_blocking_pool;
     const within   = (dNum != null) && (dNum <= cutoff);
     const trueLbl  = Number(nn.true_label) === 1;
@@ -3139,7 +3139,7 @@ function showClassifierResultsInComparisonWindow(candidateBuildingId, pairs, use
     // is present. The pipeline's final pick is decided purely by distance
     // (the 1-NN within the cutoff), so we surface the distance directly
     // rather than the derived final_score.
-    const cutoffForLabel = (window._lastAlignmentInfo && window._lastAlignmentInfo.cutoff_m) || 7.0;
+    const cutoffForLabel = (window._lastAlignmentInfo && window._lastAlignmentInfo.cutoff_m) || 10.0;
     const gridCols = 'display:grid;grid-template-columns:0.9fr 1.5fr 0.8fr 0.9fr 1.0fr 0.9fr;gap:6px;';
     const header = document.createElement('div');
     header.style.cssText = `${gridCols}padding:3px 2px 5px;border-bottom:2px solid #e2e8f0;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.06em;`;

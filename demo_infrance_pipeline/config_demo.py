@@ -34,7 +34,7 @@ config.FilePaths.dataset_partition_path = CACHE_DIR
 # Restrict BKAFI to a single (dim, neighbors) configuration for inference.
 # Training iterates over all combinations; inference needs just one.
 DEMO_BKAFI_DIM = len(config.Features.object_properties) - 1  # use the top-(N-1) most-important features
-DEMO_NN_COUNT  = 30                                          # candidate index buildings per cand
+DEMO_NN_COUNT  = 5                                           # candidate index buildings per cand
 config.Blocking.bkafi_dim_list           = [DEMO_BKAFI_DIM]
 config.Blocking.cand_pairs_per_item_list = [DEMO_NN_COUNT]
 config.Blocking.nn_param                 = DEMO_NN_COUNT + 1
