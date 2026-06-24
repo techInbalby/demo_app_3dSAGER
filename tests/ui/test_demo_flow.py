@@ -17,6 +17,14 @@ regressions that bit us repeatedly:
 """
 import pytest
 
+from .helpers import (
+    SOURCE_A_CHECKBOX,
+    activate_source_a,
+    step_button,
+    wait_for_step_completed,
+    wait_for_step_enabled,
+)
+
 pytestmark = pytest.mark.ui
 
 
@@ -61,10 +69,8 @@ def test_toggle_source_a_loads_damaged_layer(demo_page):
     requests = []
     demo_page.on('request', lambda r: requests.append(r.url))
 
-    # Toggle Source A on (checkbox in the layer panel).
-    # Multiple A checkboxes exist (file-picker sidebar + the visible legend
-    # panel). Target the visible legend one.
-    a_checkbox = demo_page.locator('#viewer-legend-items input[data-source="A"]').first
+    # Toggle Source A on via the visible legend checkbox.
+    a_checkbox = demo_page.locator(SOURCE_A_CHECKBOX).first
     if not a_checkbox.is_checked():
         a_checkbox.click()
     # Allow the layer-load fetch to fire.
@@ -80,40 +86,18 @@ def test_toggle_source_a_loads_damaged_layer(demo_page):
 # Step 1 click → button turns green, Step 2 enables
 # ---------------------------------------------------------------------------
 
-def _activate_source_a(demo_page):
-    """Tick the Source A checkbox + wait for Step 1 to become enabled.
-
-    Step 1 enables when setActiveLayer runs with a Source A path
-    (demo.js:1222), which fires after the user toggles A's checkbox.
-    """
-    # Multiple A checkboxes exist (file-picker sidebar + the visible legend
-    # panel). Target the visible legend one.
-    a_checkbox = demo_page.locator('#viewer-legend-items input[data-source="A"]').first
-    if not a_checkbox.is_checked():
-        a_checkbox.click()
-    demo_page.wait_for_function(
-        "() => { const b = document.getElementById('step-btn-1'); return b && !b.disabled; }",
-        timeout=20_000,
-    )
-
-
 def test_step1_click_completes_quickly_on_warm_cache(demo_page):
     """Step 1 on a warm cache is a cache-hit roundtrip — should complete
     in under 30 seconds and flip the button text to 'Completed'."""
-    _activate_source_a(demo_page)
-    step1 = demo_page.locator('#step-btn-1')
+    activate_source_a(demo_page)
+    step1 = demo_page.locator(step_button(1))
     step1.click()
-    demo_page.wait_for_function(
-        "() => document.getElementById('step-btn-1') && "
-        "document.getElementById('step-btn-1').textContent.toLowerCase().includes('completed')",
-        timeout=30_000,
-    )
+    wait_for_step_completed(demo_page, 1, timeout_ms=30_000)
     text = step1.text_content().strip().lower()
     assert 'completed' in text
 
     # Step 2 should now be enabled.
-    step2 = demo_page.locator('#step-btn-2')
-    assert not step2.is_disabled()
+    assert not demo_page.locator(step_button(2)).is_disabled()
 
 
 # ---------------------------------------------------------------------------
@@ -124,23 +108,16 @@ def test_full_pipeline_click_through(demo_page):
     """Click each step in turn; verify each turns Completed before clicking
     the next. Validates the cache-hit roundtrip + UI state updates for the
     whole 4-step flow."""
-    _activate_source_a(demo_page)
+    activate_source_a(demo_page)
     for step_num in (1, 2, 3, 4):
-        btn = demo_page.locator(f'#step-btn-{step_num}')
+        btn = demo_page.locator(step_button(step_num))
         if 'completed' in (btn.text_content() or '').lower():
             continue
-        # Wait for the previous step to enable this one.
-        demo_page.wait_for_function(
-            f"() => !document.getElementById('step-btn-{step_num}').disabled",
-            timeout=30_000,
-        )
+        wait_for_step_enabled(demo_page, step_num)
         btn.click()
-        demo_page.wait_for_function(
-            f"() => document.getElementById('step-btn-{step_num}').textContent.toLowerCase().includes('completed')",
-            timeout=60_000,
-        )
+        wait_for_step_completed(demo_page, step_num)
     for step_num in (1, 2, 3, 4):
-        btn = demo_page.locator(f'#step-btn-{step_num}')
+        btn = demo_page.locator(step_button(step_num))
         assert 'completed' in (btn.text_content() or '').lower()
 
 
@@ -158,3 +135,59 @@ def test_align_cutoff_input_defaults_to_10(demo_page):
     """Plan addendum 9: cutoff=10 m is the demo default (was 7)."""
     input_box = demo_page.locator('#cfg-align-cutoff')
     assert input_box.input_value() in ('10', '10.0')
+
+
+# ---------------------------------------------------------------------------
+# Step button hover tooltips — addendum 14 ("do X first" hints)
+# ---------------------------------------------------------------------------
+
+def test_step1_tooltip_when_no_layer_loaded(demo_page):
+    """Plan addendum 14: when Source A isn't toggled on, Step 1's title
+    attribute names that as the next user action."""
+    title = demo_page.locator(step_button(1)).get_attribute('title') or ''
+    assert 'Candidates' in title or 'layer' in title.lower(), (
+        f"Step 1 disabled-state tooltip should mention toggling Candidates / the layer. "
+        f"Got: {title!r}")
+
+
+def test_step2_tooltip_blocked_on_step1(demo_page):
+    """Step 2's tooltip when Step 1 isn't done mentions Step 1 / Featurization."""
+    title = demo_page.locator(step_button(2)).get_attribute('title') or ''
+    assert 'Step 1' in title or 'Featurization' in title, (
+        f"Step 2 tooltip should mention Step 1 prerequisite. Got: {title!r}")
+
+
+def test_step3_tooltip_blocked_on_step2(demo_page):
+    title = demo_page.locator(step_button(3)).get_attribute('title') or ''
+    assert 'Step 2' in title or 'Blocking' in title, (
+        f"Step 3 tooltip should mention Step 2 prerequisite. Got: {title!r}")
+
+
+def test_step4_tooltip_blocked_on_step3(demo_page):
+    title = demo_page.locator(step_button(4)).get_attribute('title') or ''
+    assert 'Step 3' in title or 'Classifier' in title, (
+        f"Step 4 tooltip should mention Step 3 prerequisite. Got: {title!r}")
+
+
+# ---------------------------------------------------------------------------
+# Cesium sanity — entities are actually present after Step 1
+# ---------------------------------------------------------------------------
+
+def test_cesium_has_building_entities_after_step1(demo_page):
+    """After Step 1 completes, the Cesium viewer should have a non-empty
+    buildingEntities map. Catches regressions where the damaged-layer swap
+    blanks the viewer (which a refactor of `building-colors.js` or
+    `layer-manager.js` could plausibly introduce)."""
+    activate_source_a(demo_page)
+    demo_page.locator(step_button(1)).click()
+    wait_for_step_completed(demo_page, 1, timeout_ms=30_000)
+    # Allow the layer reload + entity hydration to settle.
+    demo_page.wait_for_timeout(3000)
+    entity_count = demo_page.evaluate(
+        """() => {
+            if (!window.viewer || !window.viewer.buildingEntities) return 0;
+            return window.viewer.buildingEntities.size;
+        }"""
+    )
+    assert entity_count > 0, (
+        f"window.viewer.buildingEntities should be populated after Step 1; got {entity_count}")

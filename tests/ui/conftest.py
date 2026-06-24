@@ -24,7 +24,14 @@ def browser_context_args(browser_context_args):
 
 @pytest.fixture
 def demo_page(page, base_url):
-    """Open /demo, wait for the layer-picker to render."""
+    """Open /demo and wait for the layer panel to be fully populated.
+
+    The legend renders async (loadDataFiles → renderFileList). Waiting for
+    the panel container to attach isn't enough — the Source A checkbox
+    inside it only exists after the fetch resolves and the JS onchange
+    handler is wired. Wait for the checkbox itself so subsequent tests
+    can interact with it without racing the JS init."""
     page.goto(f'{base_url}/demo')
-    page.wait_for_selector('#viewer-legend-items', state='attached', timeout=10_000)
+    page.wait_for_selector('#viewer-legend-items input[data-source="A"]',
+                           state='visible', timeout=15_000)
     return page
