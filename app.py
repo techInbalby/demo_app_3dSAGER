@@ -30,23 +30,24 @@ Compress(app)
 app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
 app.register_blueprint(alignment_bp, url_prefix='/api/alignment')
 
-# Configuration
-BASE_DIR = Path(__file__).parent
-DATA_DIR = BASE_DIR / 'data'
-RESULTS_DIR = BASE_DIR / 'results_demo'
-PIPELINE_CACHE_ROOT = RESULTS_DIR / 'cache'
-SAVED_MODEL_DIR = BASE_DIR / 'saved_model_files'
-LOGS_DIR = BASE_DIR / 'logs'
-
-# Results JSON files
-DEMO_RESULTS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_detailed_results_XGBClassifier_seed1.json'
-DEMO_METRICS_JSON = RESULTS_DIR / 'demo_inference' / 'demo_metrics_summary_seed1.json'
-FEATURES_PARQUET = DATA_DIR / 'property_dicts' / 'features.parquet'
-
-# Confidence threshold for predictions (hardcoded, but easy to make configurable)
-CONFIDENCE_THRESHOLD = 0.5
-REDIS_URL = os.getenv('REDIS_URL', 'redis://redis:6379/0')
-CACHE_TTL_SECONDS = int(os.getenv('CACHE_TTL_SECONDS', '21600'))
+# Configuration — single source of truth lives in lib.config; re-exported here
+# so existing module-level references keep working until each consumer is
+# migrated to import from lib.config directly.
+from lib.config import (
+    BASE_DIR,
+    DATA_DIR,
+    RESULTS_DIR,
+    PIPELINE_CACHE_ROOT,
+    SAVED_MODEL_DIR,
+    LOGS_DIR,
+    DEMO_RESULTS_JSON,
+    DEMO_METRICS_JSON,
+    FEATURES_PARQUET,
+    CONFIDENCE_THRESHOLD,
+    REDIS_URL,
+    CACHE_TTL_SECONDS,
+    ensure_directories_exist,
+)
 
 _redis_client = None
 
@@ -125,9 +126,7 @@ def get_bkafi_by_file_cache():
         return cached
     return None
 
-# Ensure directories exist
-for directory in [DATA_DIR, RESULTS_DIR, SAVED_MODEL_DIR, LOGS_DIR]:
-    directory.mkdir(exist_ok=True)
+ensure_directories_exist()
 
 
 @app.route('/')
