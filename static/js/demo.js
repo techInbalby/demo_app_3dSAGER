@@ -711,9 +711,80 @@ function loadDataFiles() {
 
             // Show the legend with all files unchecked — user loads manually
             updateViewerLegend();
+
+            // The damaged Source A layer needs preprocess to have run at least
+            // once. Hydrate state from the backend manifest (warm cache → just
+            // flip Step 1 to Completed; cold cache → silently fire preprocess
+            // so the damaged file exists by the time the user toggles A on).
+            hydratePipelineFromManifest();
         })
         .catch(error => {
             console.error('Error loading files:', error);
+        });
+}
+
+// Mark Step 1 as Completed in the UI without re-running its success handler.
+// Mirrors the visual state set by handleFeatureSuccess but skips the loading
+// overlay + tutorial advance + building-color refresh (those only make sense
+// on an interactive click, not on page load).
+function _markStep1CompletedInUI() {
+    pipelineState.step1Completed = true;
+    featuresLoaded = true;
+    const stepBtn = document.getElementById('step-btn-1');
+    if (stepBtn) {
+        stepBtn.textContent = 'Completed';
+        stepBtn.style.background = '#28a745';
+        stepBtn.disabled = true;
+    }
+    const step2Btn = document.getElementById('step-btn-2');
+    if (step2Btn) step2Btn.disabled = false;
+    const calcBtn = document.getElementById('calc-features-btn');
+    if (calcBtn) {
+        calcBtn.textContent = 'Features Calculated';
+        calcBtn.style.background = '#28a745';
+        calcBtn.disabled = true;
+    }
+    updatePipelineUI();
+    updateViewerLegend();
+}
+
+// Read the backend cache state on page load. The damaged Source A layer the
+// Cesium viewer wants to show is produced by stage_preprocess; if that's
+// already done in this cache_dir the layer is ready immediately. If not,
+// fire it in the background so the file is ready by the time the user
+// toggles Source A on (or, on a warm reload, the existing layer redraws as
+// damaged once preprocess completes).
+function hydratePipelineFromManifest() {
+    fetch('/api/pipeline/manifest')
+        .then(r => r.ok ? r.json() : null)
+        .then((manifest) => {
+            const stages = (manifest && manifest.stages) || {};
+            const preprocessDone = !!(stages.preprocess && stages.preprocess.complete);
+            if (preprocessDone) {
+                _markStep1CompletedInUI();
+                return;
+            }
+            // Cold cache: kick off preprocess silently. No loading overlay —
+            // the page stays interactive. When done, mark Step 1 as completed
+            // and force a redraw of any already-loaded Source A layer so the
+            // viewer picks up the freshly-written damaged CityJSON.
+            if (!window.PipelineRunner) return;
+            console.log('[hydrate] preprocess not done — auto-firing /api/pipeline/start?stage=features');
+            window.PipelineRunner.start('features', {
+                onProgress: () => {},
+                onComplete: () => {
+                    _markStep1CompletedInUI();
+                    if (typeof reloadSourceAAsDamaged === 'function') {
+                        reloadSourceAAsDamaged();
+                    }
+                },
+                onError: (msg) => {
+                    console.warn('[hydrate] preprocess auto-run failed:', msg);
+                },
+            });
+        })
+        .catch((err) => {
+            console.warn('[hydrate] manifest fetch failed:', err);
         });
 }
 
@@ -779,13 +850,15 @@ const SOURCE_COLORS = {
  * This handles the race between DOMContentLoaded (which fires loadDataFiles)
  * and the Cesium viewer's async initialisation (setTimeout polling for Cesium).
  */
-// When Source A has been through Step 1, the worker has written a heights-only
-// damaged CityJSON to results_demo/cache/<hash>/. The viewer should load THAT
-// instead of the pristine file so users see the same z-axis damage the pipeline
-// saw (without the CRS rotation/translation, which would put cands offscreen).
+// Source A is always shown as the heights-only damaged variant (the pristine
+// CityJSON in data/ is only the pipeline's input file, never the displayed
+// layer). The worker writes damaged_heights_only_cands.json to the cache on
+// the first preprocess run; hydratePipelineFromManifest() fires preprocess
+// automatically on cold deploys so the route is ready before the user clicks
+// anywhere.
 function _sourceALoadOptions(filePath, source) {
     const base = { append: true, source };
-    if (source === 'A' && window.pipelineState && window.pipelineState.step1Completed) {
+    if (source === 'A') {
         base.url = '/api/alignment/cityjson?stage=damaged_heights';
     }
     return base;
