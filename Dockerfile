@@ -43,6 +43,7 @@ COPY data_api/               data_api/
 COPY features_api/           features_api/
 COPY bkafi_api/              bkafi_api/
 COPY building_api/           building_api/
+COPY status_api/             status_api/
 COPY lib/                    lib/
 COPY demo_infrance_pipeline/  demo_infrance_pipeline/
 
