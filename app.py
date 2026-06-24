@@ -14,7 +14,6 @@ import hashlib
 import redis
 
 from tasks import celery as celery_app
-from tasks import calculate_features as calculate_features_task
 from tasks import load_bkafi_results as load_bkafi_task
 
 from pipeline import pipeline_bp
@@ -24,6 +23,7 @@ from pipeline import pipeline_bp
 # /api/alignment so the frontend contract is unchanged.
 from align_api import alignment_bp
 from data_api import data_api_bp
+from features_api import features_api_bp
 
 app = Flask(__name__)
 # Enable compression for all responses (gzip)
@@ -31,6 +31,10 @@ Compress(app)
 app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
 app.register_blueprint(alignment_bp, url_prefix='/api/alignment')
 app.register_blueprint(data_api_bp, url_prefix='/api/data')
+# features_api has two top-level URL spaces (/api/features/* and
+# /api/building/features/<id>), so it's mounted at /api with routes that
+# include the second-level path.
+app.register_blueprint(features_api_bp, url_prefix='/api')
 
 # Configuration — single source of truth lives in lib.config; re-exported here
 # so existing module-level references keep working until each consumer is
@@ -68,17 +72,6 @@ from lib.cache import (
 from lib.id_utils import extract_numeric_id, numeric_ids_match
 
 
-def build_features_from_parquet(parquet_path: Path):
-    df = pd.read_parquet(parquet_path)
-    building_features = {}
-    for row in df.itertuples(index=False):
-        building_id = str(row.building_id)
-        feature_name = str(row.feature_name)
-        value = row.value
-        building_features.setdefault(building_id, {})[feature_name] = value
-    return building_features
-
-
 ensure_directories_exist()
 
 
@@ -112,345 +105,12 @@ def invalidate_buildings_status_cache(file_path: str = None):
     no-op so the modules continue to import cleanly."""
     return
 
-@app.route('/api/features/calculate', methods=['POST'])
-def calculate_all_features():
-    """
-    Calculate geometric features for all buildings in the selected file
-    Loads from joblib file: data/property_dicts/Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib
-    """
-    try:
-        data = request.get_json()
-        file_path = data.get('file_path', '')
-        
-        if not file_path:
-            return jsonify({'error': 'No file path provided'}), 400
-        
-        print(f"Calculating features for all buildings in file: {file_path}")
 
-        cache_key = f"features:{file_path}"
+# /api/features/calculate + /api/building/features/<id> moved to features_api
+# blueprint (registered at the top of this file). See features_api/routes.py
+# for the route bodies and features_api/loaders.py for the parquet/joblib
+# helpers + the 6-strategy ID matcher.
 
-        # Fast existence check: use the compact ID list (tiny) instead of loading 6+ MB of feature values
-        if file_path in features_cache:
-            return jsonify({
-                'success': True,
-                'message': f'Features already cached for {file_path}',
-                'building_count': len(features_cache[file_path])
-            })
-        features_ids = cache_get_json(f'features_ids:{file_path}')
-        if features_ids is not None:
-            return jsonify({
-                'success': True,
-                'message': f'Features already cached for {file_path}',
-                'building_count': len(features_ids)
-            })
-
-        if get_redis_client():
-            job = calculate_features_task.delay(file_path)
-            return jsonify({
-                'job_id': job.id,
-                'status': 'queued',
-                'message': 'Feature calculation queued'
-            }), 202
-
-        if FEATURES_PARQUET.exists():
-            building_features = build_features_from_parquet(FEATURES_PARQUET)
-            features_cache[file_path] = building_features
-            cache_set_json(cache_key, building_features)
-            cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
-            invalidate_buildings_status_cache(file_path)
-            return jsonify({
-                'success': True,
-                'message': f'Features loaded from parquet for {file_path}',
-                'building_count': len(building_features)
-            })
-        
-        # Load from joblib file
-        joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
-        
-        if not joblib_path.exists():
-            return jsonify({'error': f'Joblib file not found at {joblib_path}'}), 404
-        
-        import joblib
-        import numpy as np
-        with open(joblib_path, 'rb') as f:
-            property_dicts = joblib.load(f)
-        
-        print(f"Loaded property dicts from: {joblib_path}")
-        print(f"Number of features: {len(property_dicts) if isinstance(property_dicts, dict) else 'unknown'}")
-        
-        # Extract all unique building IDs from the 'cands' dictionaries
-        building_ids = set()
-        if isinstance(property_dicts, dict) and len(property_dicts) > 0:
-            first_feature = list(property_dicts.values())[0]
-            if isinstance(first_feature, dict) and 'cands' in first_feature:
-                # Convert all building IDs to strings (handle numpy string types)
-                building_ids = set(str(bid) for bid in first_feature['cands'].keys())
-        
-        print(f"Number of unique buildings: {len(building_ids)}")
-        print(f"Sample building IDs: {list(building_ids)[:5]}")
-        
-        # Reorganize data: convert from feature->building to building->features
-        # This makes it easier to look up features for a specific building
-        building_features = {}
-        for building_id in building_ids:
-            building_id_str = str(building_id)  # Ensure it's a string
-            building_features[building_id_str] = {}
-            for feature_name, feature_data in property_dicts.items():
-                if isinstance(feature_data, dict) and 'cands' in feature_data:
-                    # Try both string and original key format
-                    cands_dict = feature_data['cands']
-                    # Check if building_id exists (try as string and original format)
-                    key_to_use = None
-                    if building_id_str in cands_dict:
-                        key_to_use = building_id_str
-                    else:
-                        # Try to find matching key (handle numpy string types)
-                        for key in cands_dict.keys():
-                            if str(key) == building_id_str:
-                                key_to_use = key
-                                break
-                    
-                    if key_to_use is not None:
-                        value = cands_dict[key_to_use]
-                        # Convert numpy types to Python native types
-                        if isinstance(value, (np.integer, np.floating)):
-                            value = float(value)
-                        elif isinstance(value, np.ndarray):
-                            value = value.tolist()
-                        building_features[building_id_str][feature_name] = value
-        
-        # Store in cache (using the reorganized structure)
-        features_cache[file_path] = building_features
-        cache_set_json(cache_key, building_features)
-        cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
-        invalidate_buildings_status_cache(file_path)
-        
-        # Return success with count
-        building_count = len(building_features)
-        return jsonify({
-            'success': True,
-            'message': f'Features calculated for {building_count} buildings',
-            'building_count': building_count
-        })
-            
-    except Exception as e:
-        import traceback
-        print(f"Error calculating features: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/building/features/<building_id>')
-def get_building_features(building_id):
-    """
-    Get geometric features for a building from cached property dicts
-    Query params: file (the selected file path)
-    """
-    try:
-        file_path = request.args.get('file', '')
-        print(f"Getting features for building {building_id} from file {file_path}")
-        
-        # First check cache
-        building_features = get_features_cache(file_path)
-        if building_features:
-            # Try exact match first
-            if isinstance(building_features, dict) and building_id in building_features:
-                features = building_features[building_id]
-                print(f"Loaded features from cache for building {building_id}")
-                return jsonify({'building_id': building_id, 'features': features})
-            
-            numeric_id = extract_numeric_id(building_id) or (
-                building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
-            )
-            numeric_id = str(numeric_id)
-            
-            print(f"Extracted numeric ID: {numeric_id} from building_id: {building_id}")
-            print(f"Available building IDs in cache (first 5): {list(building_features.keys())[:5] if isinstance(building_features, dict) else 'N/A'}")
-            print(f"Total buildings in cache: {len(building_features) if isinstance(building_features, dict) else 0}")
-            
-            if not isinstance(building_features, dict):
-                print("Building features cache is not a dictionary, skipping cache lookup")
-            else:
-                # Try exact match
-                if numeric_id in building_features:
-                    features = building_features[numeric_id]
-                    print(f"Loaded features from cache for building {building_id} (matched as {numeric_id}): {len(features)} features")
-                    return jsonify({'building_id': building_id, 'features': features})
-                
-                # Try to find by string comparison and regex (handle any type mismatches)
-                # Also try with/without leading zeros
-                numeric_id_variants = [
-                    numeric_id,  # Original
-                    numeric_id.lstrip('0'),  # Without leading zeros
-                    numeric_id.zfill(16),  # Padded to 16 digits
-                ]
-                
-                for variant in numeric_id_variants:
-                    # Try exact match with variant
-                    if variant in building_features:
-                        features = building_features[variant]
-                        print(f"Loaded features from cache for building {building_id} (matched variant {variant}): {len(features)} features")
-                        return jsonify({'building_id': building_id, 'features': features})
-                    
-                    # Try to find by string comparison and regex
-                    for cached_id, cached_features in building_features.items():
-                        cached_id_str = str(cached_id)
-                        # Try exact match
-                        if cached_id_str == variant:
-                            print(f"Loaded features from cache for building {building_id} (matched {cached_id} as variant {variant}): {len(cached_features)} features")
-                            return jsonify({'building_id': building_id, 'features': cached_features})
-                        # Try regex match - check if variant is contained in cached_id or vice versa
-                        if re.search(variant, cached_id_str) or re.search(cached_id_str, variant):
-                            print(f"Loaded features from cache for building {building_id} (regex matched {cached_id} with variant {variant}): {len(cached_features)} features")
-                            return jsonify({'building_id': building_id, 'features': cached_features})
-                        # Try partial match - check if the variant ends with cached_id or vice versa
-                        if variant.endswith(cached_id_str) or cached_id_str.endswith(variant):
-                            print(f"Loaded features from cache for building {building_id} (partial match {cached_id} with variant {variant}): {len(cached_features)} features")
-                            return jsonify({'building_id': building_id, 'features': cached_features})
-                
-                # Final check: search through all building IDs to see if any contain the numeric_id
-                print(f"Searching through all {len(building_features)} building IDs in cache for {numeric_id}...")
-                for cached_id, cached_features in building_features.items():
-                    cached_id_str = str(cached_id)
-                    # Check if numeric_id appears anywhere in cached_id
-                    if numeric_id in cached_id_str or cached_id_str in numeric_id:
-                        print(f"Found partial match in cache: {cached_id} contains {numeric_id} or vice versa")
-                        print(f"Loaded features from cache for building {building_id} (found {cached_id}): {len(cached_features)} features")
-                        return jsonify({'building_id': building_id, 'features': cached_features})
-        
-        # Try to load from parquet file if not in cache
-        if FEATURES_PARQUET.exists():
-            building_features = build_features_from_parquet(FEATURES_PARQUET)
-        else:
-            # Fall back to joblib
-            joblib_path = DATA_DIR / 'property_dicts' / 'Hague_demo_130425_demo_inference_vector_normalization=True_seed=1.joblib'
-            
-            if not joblib_path.exists():
-                return jsonify({'error': f'Joblib file not found at {joblib_path}', 'features': {}}), 404
-
-            import joblib
-            import numpy as np
-            with open(joblib_path, 'rb') as f:
-                property_dicts = joblib.load(f)
-            
-            # Extract all unique building IDs
-            building_ids = set()
-            if isinstance(property_dicts, dict) and len(property_dicts) > 0:
-                first_feature = list(property_dicts.values())[0]
-                if isinstance(first_feature, dict) and 'cands' in first_feature:
-                    # Convert all building IDs to strings (handle numpy string types)
-                    building_ids = set(str(bid) for bid in first_feature['cands'].keys())
-            
-            # Reorganize data: convert from feature->building to building->features
-            building_features = {}
-            for bid in building_ids:
-                bid_str = str(bid)  # Ensure it's a string
-                building_features[bid_str] = {}
-                for feature_name, feature_data in property_dicts.items():
-                    if isinstance(feature_data, dict) and 'cands' in feature_data:
-                        cands_dict = feature_data['cands']
-                        # Try both string and original key format
-                        key_to_use = None
-                        if bid_str in cands_dict:
-                            key_to_use = bid_str
-                        else:
-                            # Try to find matching key (handle numpy string types)
-                            for key in cands_dict.keys():
-                                if str(key) == bid_str:
-                                    key_to_use = key
-                                    break
-                        
-                        if key_to_use is not None:
-                            value = cands_dict[key_to_use]
-                            # Convert numpy types to Python native types
-                            if isinstance(value, (np.integer, np.floating)):
-                                value = float(value)
-                            elif isinstance(value, np.ndarray):
-                                value = value.tolist()
-                            building_features[bid_str][feature_name] = value
-            
-        # Store in cache
-        features_cache[file_path] = building_features
-        cache_set_json(f'features:{file_path}', building_features)
-        cache_set_json(f'features_ids:{file_path}', list(building_features.keys()))
-        invalidate_buildings_status_cache(file_path)
-        
-        # Try exact match first
-        if building_id in building_features:
-            features = building_features[building_id]
-            print(f"Loaded features from joblib for building {building_id}: {len(features)} features")
-            return jsonify({'building_id': building_id, 'features': features})
-        
-        numeric_id = extract_numeric_id(building_id) or (
-            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
-        )
-        numeric_id = str(numeric_id)
-
-        print(f"Extracted numeric ID: {numeric_id} from building_id: {building_id}")
-        print(f"Available building IDs in joblib (first 5): {list(building_features.keys())[:5]}")
-        print(f"Total buildings in joblib: {len(building_features)}")
-        
-        # Try exact match
-        if numeric_id in building_features:
-            features = building_features[numeric_id]
-            print(f"Loaded features from joblib for building {building_id} (matched as {numeric_id}): {len(features)} features")
-            return jsonify({'building_id': building_id, 'features': features})
-        
-        # Try to find by string comparison and regex (handle any type mismatches)
-        # Also try with/without leading zeros
-        numeric_id_variants = [
-            numeric_id,  # Original
-            numeric_id.lstrip('0'),  # Without leading zeros
-            numeric_id.zfill(16),  # Padded to 16 digits
-        ]
-        
-        for variant in numeric_id_variants:
-            # Try exact match with variant
-            if variant in building_features:
-                features = building_features[variant]
-                print(f"Loaded features from joblib for building {building_id} (matched variant {variant}): {len(features)} features")
-                return jsonify({'building_id': building_id, 'features': features})
-            
-            # Try to find by string comparison and regex
-            for cached_id, cached_features in building_features.items():
-                cached_id_str = str(cached_id)
-                # Try exact match
-                if cached_id_str == variant:
-                    print(f"Loaded features from joblib for building {building_id} (matched {cached_id} as variant {variant}): {len(cached_features)} features")
-                    return jsonify({'building_id': building_id, 'features': cached_features})
-                # Try regex match - check if variant is contained in cached_id or vice versa
-                if re.search(variant, cached_id_str) or re.search(cached_id_str, variant):
-                    print(f"Loaded features from joblib for building {building_id} (regex matched {cached_id} with variant {variant}): {len(cached_features)} features")
-                    return jsonify({'building_id': building_id, 'features': cached_features})
-                # Try partial match - check if the variant ends with cached_id or vice versa
-                if variant.endswith(cached_id_str) or cached_id_str.endswith(variant):
-                    print(f"Loaded features from joblib for building {building_id} (partial match {cached_id} with variant {variant}): {len(cached_features)} features")
-                    return jsonify({'building_id': building_id, 'features': cached_features})
-        
-        # Final check: search through all building IDs to see if any contain the numeric_id
-        print(f"Searching through all {len(building_features)} building IDs for {numeric_id}...")
-        for cached_id, cached_features in building_features.items():
-            cached_id_str = str(cached_id)
-            # Check if numeric_id appears anywhere in cached_id
-            if numeric_id in cached_id_str or cached_id_str in numeric_id:
-                print(f"Found partial match: {cached_id} contains {numeric_id} or vice versa")
-                print(f"Loaded features from joblib for building {building_id} (found {cached_id}): {len(cached_features)} features")
-                return jsonify({'building_id': building_id, 'features': cached_features})
-        
-        # Building not found in joblib - return empty features with a message
-        print(f"WARNING: Building {building_id} (numeric: {numeric_id if 'numeric_id' in locals() else building_id}) not found in joblib file")
-        print("This building may not have features calculated, or it's not in the dataset used for feature calculation")
-        # Return empty features instead of mock data
-        return jsonify({
-            'building_id': building_id,
-            'features': {},
-            'message': f'Building {building_id} not found in feature dataset. This building may not have geometric features calculated.',
-            'found': False
-        })
-            
-    except Exception as e:
-        import traceback
-        print(f"Error getting features: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': str(e), 'features': {}}), 500
 
 
 @app.route('/api/bkafi/load', methods=['POST'])
