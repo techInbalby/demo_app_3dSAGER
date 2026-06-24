@@ -41,6 +41,7 @@ COPY pipeline/                pipeline/
 COPY align_api/              align_api/
 COPY data_api/               data_api/
 COPY features_api/           features_api/
+COPY bkafi_api/              bkafi_api/
 COPY lib/                    lib/
 COPY demo_infrance_pipeline/  demo_infrance_pipeline/
 

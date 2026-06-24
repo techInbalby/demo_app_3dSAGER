@@ -24,6 +24,7 @@ from pipeline import pipeline_bp
 from align_api import alignment_bp
 from data_api import data_api_bp
 from features_api import features_api_bp
+from bkafi_api import bkafi_api_bp
 
 app = Flask(__name__)
 # Enable compression for all responses (gzip)
@@ -31,10 +32,12 @@ Compress(app)
 app.register_blueprint(pipeline_bp, url_prefix='/api/pipeline')
 app.register_blueprint(alignment_bp, url_prefix='/api/alignment')
 app.register_blueprint(data_api_bp, url_prefix='/api/data')
-# features_api has two top-level URL spaces (/api/features/* and
-# /api/building/features/<id>), so it's mounted at /api with routes that
-# include the second-level path.
+# features_api and bkafi_api each have two top-level URL spaces
+# (/api/features/* + /api/building/features/<id>, and /api/bkafi/* +
+# /api/building/{bkafi,matches}/<id>), so they're mounted at /api with
+# routes that include the second-level path.
 app.register_blueprint(features_api_bp, url_prefix='/api')
+app.register_blueprint(bkafi_api_bp, url_prefix='/api')
 
 # Configuration — single source of truth lives in lib.config; re-exported here
 # so existing module-level references keep working until each consumer is
@@ -113,78 +116,9 @@ def invalidate_buildings_status_cache(file_path: str = None):
 
 
 
-@app.route('/api/bkafi/load', methods=['POST'])
-def load_bkafi_results():
-    """
-    Load BKAFI prediction results from JSON file
-    Path: results_demo/demo_inference/demo_detailed_results_XGBClassifier_seed1.json
-    """
-    try:
-        cached_bkafi = get_bkafi_cache()
-        cached_by_file = get_bkafi_by_file_cache()
-        if cached_bkafi is not None and cached_by_file is not None:
-            return jsonify({
-                'success': True,
-                'message': 'BKAFI results already cached',
-                'total_pairs': sum(len(v.get('possible_matches', [])) for v in cached_bkafi.values()),
-                'unique_candidates': len(cached_bkafi)
-            })
-
-        if get_redis_client():
-            job = load_bkafi_task.delay()
-            return jsonify({
-                'job_id': job.id,
-                'status': 'queued',
-                'message': 'BKAFI load queued'
-            }), 202
-        
-        # Load from JSON file
-        if not DEMO_RESULTS_JSON.exists():
-            return jsonify({'error': f'BKAFI results file not found at {DEMO_RESULTS_JSON}'}), 404
-        
-        with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
-            results_dict = json.load(f)
-        
-        print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
-        
-        # The new structure is file-based: {filename: {building_id: {possible_matches: [...]}}}
-        # Flatten it for easier lookup: merge all buildings from all files
-        flattened_cache = {}
-        total_pairs = 0
-        unique_candidates = 0
-        
-        for file_name, file_buildings in results_dict.items():
-            for building_id, building_data in file_buildings.items():
-                flattened_cache[building_id] = building_data
-                unique_candidates += 1
-                total_pairs += len(building_data.get('possible_matches', []))
-        
-        print(f"Number of candidate buildings: {unique_candidates} across {len(results_dict)} files")
-        
-        # Store in global cache (flattened dictionary structure for backward compatibility)
-        set_bkafi_cache(flattened_cache)
-        # Also store the original file-based structure for file-specific lookups
-        set_bkafi_by_file_cache(results_dict)
-
-        cache_set_json('bkafi:flat', flattened_cache)
-        cache_set_json('bkafi:by_file', results_dict)
-        invalidate_buildings_status_cache()
-        
-        return jsonify({
-            'success': True,
-            'message': f'BKAFI results loaded: {total_pairs} pairs for {unique_candidates} candidate buildings',
-            'total_pairs': int(total_pairs),
-            'unique_candidates': int(unique_candidates)
-        })
-            
-    except json.JSONDecodeError as e:
-        import traceback
-        print(f"Error parsing JSON: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': f'Invalid JSON format: {str(e)}'}), 500
-    except Exception as e:
-        import traceback
-        print(f"Error loading BKAFI results: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': str(e)}), 500
+# /api/bkafi/load + /api/bkafi/result + /api/building/{bkafi,matches}/<id>
+# moved to bkafi_api blueprint (registered at the top of this file). See
+# bkafi_api/routes.py and bkafi_api/lookups.py.
 
 
 @app.route('/api/jobs/<task_id>', methods=['GET'])
@@ -210,14 +144,6 @@ def get_features_result():
     if cached is None:
         return jsonify({'error': 'Features not found in cache'}), 404
     return jsonify({'file_path': file_path, 'features': cached})
-
-
-@app.route('/api/bkafi/result', methods=['GET'])
-def get_bkafi_result():
-    cached = cache_get_json('bkafi:flat')
-    if cached is None:
-        return jsonify({'error': 'BKAFI results not found in cache'}), 404
-    return jsonify({'bkafi': cached})
 
 
 @app.route('/api/building/single/<building_id>')
@@ -474,198 +400,6 @@ def find_building_file(building_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/building/bkafi/<building_id>')
-def get_building_bkafi(building_id):
-    """
-    Get BKAFI pairs for a specific candidate building
-    Each building gets up to 3 pairs (candidate building ID -> index building IDs)
-    Query params: file (the selected file path)
-    """
-    try:
-        file_path = request.args.get('file', '')
-        print(f"Getting BKAFI pairs for building {building_id} from file {file_path}")
-        
-        bkafi_cache_local = get_bkafi_cache()
-        if bkafi_cache_local is None:
-            # Try to load synchronously if not cached
-            if DEMO_RESULTS_JSON.exists():
-                with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
-                    results_dict = json.load(f)
-                flattened_cache = {}
-                for file_name, file_buildings in results_dict.items():
-                    for building_id, building_data in file_buildings.items():
-                        flattened_cache[building_id] = building_data
-                bkafi_cache_local = flattened_cache
-                cache_set_json('bkafi:flat', flattened_cache)
-                cache_set_json('bkafi:by_file', results_dict)
-                invalidate_buildings_status_cache()
-                print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
-            else:
-                return jsonify({
-                    'error': 'BKAFI results not loaded. Please run Step 2 first.',
-                    'pairs': []
-                }), 404
-        
-        numeric_id = extract_numeric_id(building_id) or (
-            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
-        )
-        numeric_id = str(numeric_id)
-
-        print(f"Looking for pairs for candidate building: {numeric_id}")
-        
-        # Lookup candidate building in dictionary (try exact match first)
-        building_data = bkafi_cache_local.get(numeric_id)
-        
-        # If no exact match, try to find by string comparison
-        if building_data is None:
-            for candidate_id in bkafi_cache_local.keys():
-                if str(candidate_id) == numeric_id:
-                    building_data = bkafi_cache_local[candidate_id]
-                    break
-                # Also try if numeric_id is contained in candidate_id or vice versa
-                if numeric_id in str(candidate_id) or str(candidate_id) in numeric_id:
-                    building_data = bkafi_cache_local[candidate_id]
-                    break
-        
-        if building_data is None:
-            print(f"No pairs found for building {building_id} (numeric: {numeric_id})")
-            return jsonify({
-                'building_id': building_id,
-                'pairs': [],
-                'message': f'No BKAFI pairs found for building {building_id}'
-            })
-        
-        # Extract possible_matches array
-        possible_matches = building_data.get('possible_matches', [])
-        print(f"Found {len(possible_matches)} pairs for building {building_id} (numeric: {numeric_id})")
-        
-        if len(possible_matches) == 0:
-            return jsonify({
-                'building_id': building_id,
-                'pairs': [],
-                'message': f'No BKAFI pairs found for building {building_id}'
-            })
-        
-        # Convert to list of dictionaries
-        pairs = []
-        for match in possible_matches:
-            pair = {
-                'candidate_id': numeric_id,
-                'index_id': str(match.get('index_id', '')),
-                'prediction': int(match.get('predicted_label', 0)) if match.get('predicted_label') is not None else (1 if match.get('confidence', 0) > CONFIDENCE_THRESHOLD else 0),
-                'true_label': int(match.get('true_label', 0)) if match.get('true_label') is not None else None,
-                'confidence': float(match.get('confidence', 0))
-            }
-            pairs.append(pair)
-        
-        # Sort by confidence (descending) instead of prediction
-        pairs.sort(key=lambda x: x.get('confidence', 0), reverse=True)
-        
-        return jsonify({
-            'building_id': building_id,
-            'pairs': pairs,
-            'total_pairs': len(pairs)
-        })
-            
-    except Exception as e:
-        import traceback
-        print(f"Error getting BKAFI pairs: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': str(e), 'pairs': []}), 500
-
-
-@app.route('/api/building/matches/<building_id>')
-def get_building_matches(building_id):
-    """
-    Get matches for a specific building from prediction results
-    Uses the same data as get_building_bkafi() - returns matches with predicted_label=1
-    Query params: file (the selected file path)
-    """
-    try:
-        file_path = request.args.get('file', '')
-        print(f"Getting matches for building {building_id} from file {file_path}")
-        
-        bkafi_cache_local = get_bkafi_cache()
-        if bkafi_cache_local is None:
-            # Try to load if not cached
-            if DEMO_RESULTS_JSON.exists():
-                with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
-                    results_dict = json.load(f)
-                # Flatten the file-based structure
-                flattened_cache = {}
-                for file_name, file_buildings in results_dict.items():
-                    for building_id, building_data in file_buildings.items():
-                        flattened_cache[building_id] = building_data
-                bkafi_cache_local = flattened_cache
-                cache_set_json('bkafi:flat', flattened_cache)
-                cache_set_json('bkafi:by_file', results_dict)
-                invalidate_buildings_status_cache()
-                print(f"Loaded BKAFI results from: {DEMO_RESULTS_JSON}")
-            else:
-                return jsonify({
-                    'error': 'BKAFI results not loaded. Please run Step 2 first.',
-                    'matches': []
-                }), 404
-        
-        numeric_id = extract_numeric_id(building_id) or (
-            building_id.split('_')[-1] if '_' in str(building_id) else str(building_id)
-        )
-        numeric_id = str(numeric_id)
-
-        # Lookup candidate building in dictionary
-        building_data = bkafi_cache_local.get(numeric_id)
-        
-        # If no exact match, try to find by string comparison
-        if building_data is None:
-            for candidate_id in bkafi_cache_local.keys():
-                if str(candidate_id) == numeric_id:
-                    building_data = bkafi_cache_local[candidate_id]
-                    break
-                if numeric_id in str(candidate_id) or str(candidate_id) in numeric_id:
-                    building_data = bkafi_cache_local[candidate_id]
-                    break
-        
-        if building_data is None:
-            return jsonify({
-                'building_id': building_id,
-                'matches': [],
-                'message': f'No matches found for building {building_id}'
-            })
-        
-        # Extract possible_matches and filter for predicted matches (predicted_label=1 or confidence > threshold)
-        possible_matches = building_data.get('possible_matches', [])
-        matches = []
-        
-        for match in possible_matches:
-            # Get predicted_label or calculate from confidence
-            predicted_label = match.get('predicted_label')
-            if predicted_label is None:
-                predicted_label = 1 if match.get('confidence', 0) > CONFIDENCE_THRESHOLD else 0
-            else:
-                predicted_label = int(predicted_label)
-            
-            # Only include matches with predicted_label=1
-            if predicted_label == 1:
-                match_data = {
-                    'id': match.get('index_id', ''),
-                    'building_id': str(match.get('index_id', '')),
-                    'source': 'Source B',  # Index buildings are from Source B
-                    'confidence': float(match.get('confidence', 0)),
-                    'true_label': int(match.get('true_label', 0)) if match.get('true_label') is not None else None
-                }
-                matches.append(match_data)
-        
-        # Sort by confidence (descending)
-        matches.sort(key=lambda x: x.get('confidence', 0), reverse=True)
-        
-        return jsonify({
-            'building_id': building_id,
-            'matches': matches
-        })
-            
-    except Exception as e:
-        import traceback
-        print(f"Error getting matches: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': str(e), 'matches': []}), 500
 
 
 @app.route('/api/buildings/status', methods=['GET'])
