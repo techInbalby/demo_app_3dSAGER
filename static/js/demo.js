@@ -723,57 +723,25 @@ function loadDataFiles() {
         });
 }
 
-// Mark Step 1 as Completed in the UI without re-running its success handler.
-// Mirrors the visual state set by handleFeatureSuccess but skips the loading
-// overlay + tutorial advance + building-color refresh (those only make sense
-// on an interactive click, not on page load).
-function _markStep1CompletedInUI() {
-    pipelineState.step1Completed = true;
-    featuresLoaded = true;
-    const stepBtn = document.getElementById('step-btn-1');
-    if (stepBtn) {
-        stepBtn.textContent = 'Completed';
-        stepBtn.style.background = '#28a745';
-        stepBtn.disabled = true;
-    }
-    const step2Btn = document.getElementById('step-btn-2');
-    if (step2Btn) step2Btn.disabled = false;
-    const calcBtn = document.getElementById('calc-features-btn');
-    if (calcBtn) {
-        calcBtn.textContent = 'Features Calculated';
-        calcBtn.style.background = '#28a745';
-        calcBtn.disabled = true;
-    }
-    updatePipelineUI();
-    updateViewerLegend();
-}
-
 // Read the backend cache state on page load. The damaged Source A layer the
-// Cesium viewer wants to show is produced by stage_preprocess; if that's
-// already done in this cache_dir the layer is ready immediately. If not,
-// fire it in the background so the file is ready by the time the user
-// toggles Source A on (or, on a warm reload, the existing layer redraws as
-// damaged once preprocess completes).
+// Cesium viewer renders is produced by stage_preprocess. On a warm cache the
+// file is already there and the layer-load route serves it instantly — we
+// touch nothing in the sidebar; the demo's pedagogical flow still wants the
+// user to click each step. On a cold cache we silently fire preprocess in
+// the background so the damaged file is ready by the time the user toggles
+// Source A on; the sidebar Step 1 button still stays in its fresh state.
 function hydratePipelineFromManifest() {
     fetch('/api/pipeline/manifest')
         .then(r => r.ok ? r.json() : null)
         .then((manifest) => {
             const stages = (manifest && manifest.stages) || {};
             const preprocessDone = !!(stages.preprocess && stages.preprocess.complete);
-            if (preprocessDone) {
-                _markStep1CompletedInUI();
-                return;
-            }
-            // Cold cache: kick off preprocess silently. No loading overlay —
-            // the page stays interactive. When done, mark Step 1 as completed
-            // and force a redraw of any already-loaded Source A layer so the
-            // viewer picks up the freshly-written damaged CityJSON.
+            if (preprocessDone) return;
             if (!window.PipelineRunner) return;
             console.log('[hydrate] preprocess not done — auto-firing /api/pipeline/start?stage=features');
             window.PipelineRunner.start('features', {
                 onProgress: () => {},
                 onComplete: () => {
-                    _markStep1CompletedInUI();
                     if (typeof reloadSourceAAsDamaged === 'function') {
                         reloadSourceAAsDamaged();
                     }
