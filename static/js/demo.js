@@ -808,6 +808,9 @@ function waitForViewerThenLoad(filePath, source, attempts) {
 
 // Reload the active Source A layer with the heights-only damaged variant.
 // Called after Step 1 completes so the viewer immediately reflects the damage.
+// We remove the pristine entities first; otherwise loadCityJSON's append:true
+// stacks the damaged entities on top of the pristine ones and the viewer shows
+// two layers at once (pristine + damaged).
 function reloadSourceAAsDamaged() {
     if (!window.viewer || !window.viewer.loadCityJSON) return;
     const allA = (allAvailableFiles && allAvailableFiles.A) || [];
@@ -815,6 +818,9 @@ function reloadSourceAAsDamaged() {
         const fp = file.path;
         const state = layerState[fp] || {};
         if (state.visible) {
+            if (typeof window.viewer.removeLayer === 'function') {
+                window.viewer.removeLayer(fp);
+            }
             window.viewer.loadCityJSON(fp, _sourceALoadOptions(fp, 'A'));
         }
     });
