@@ -3513,6 +3513,65 @@ function updatePipelineUI() {
             step4Status.innerHTML = ''; step4Status.className = 'step-status';
         }
     }
+
+    _updateStepTooltips();
+}
+
+// Set a hover tooltip on each step button. When a step is blocked on an
+// earlier action, the tooltip says explicitly what to do first instead of
+// just describing the action itself — so a disabled grey button isn't a
+// dead end.
+function _updateStepTooltips() {
+    const ps = pipelineState || {};
+    const aLayerOn = !!selectedFile;   // Source A loaded → step-btn-1 enabled
+
+    const specs = [
+        {
+            id: 'step-btn-1',
+            done: ps.step1Completed,
+            doneTip: 'Geometric features computed. Click Step 2 next.',
+            readyTip: 'Compute geometric features for all candidate buildings.',
+            blockedTip: 'Toggle the Candidates (A) layer on first (checkbox in the Layers panel).',
+            blocked: !aLayerOn,
+        },
+        {
+            id: 'step-btn-2',
+            done: ps.step2Completed,
+            doneTip: 'Blocking pairs generated. Click Step 3 next.',
+            readyTip: 'Generate candidate matching pairs via BKAFI nearest-neighbour search.',
+            blockedTip: 'Complete Step 1 (Geometric Featurization) first.',
+            blocked: !ps.step1Completed,
+        },
+        {
+            id: 'step-btn-3',
+            done: ps.step3Completed,
+            doneTip: 'Classifier scored every pair. Click Step 4 next.',
+            readyTip: 'Score every blocking pair with the matching classifier.',
+            blockedTip: 'Complete Step 2 (Geometric Blocking) first.',
+            blocked: !ps.step2Completed,
+        },
+        {
+            id: 'step-btn-4',
+            done: ps.step4Completed,
+            doneTip: 'Alignment + spatial re-scoring complete.',
+            readyTip: 'Run RANSAC rigid alignment + spatial re-scoring of every cand.',
+            blockedTip: 'Complete Step 3 (Matching Classifier) first.',
+            blocked: !ps.step3Completed,
+        },
+    ];
+
+    for (const spec of specs) {
+        const btn = document.getElementById(spec.id);
+        if (!btn) continue;
+        let tip;
+        if (spec.done) tip = spec.doneTip;
+        else if (spec.blocked) tip = spec.blockedTip;
+        else tip = spec.readyTip;
+        btn.setAttribute('title', tip);
+        // Also surface on the wrapping step card so the whole row is hoverable.
+        const card = btn.closest('.step');
+        if (card) card.setAttribute('title', tip);
+    }
 }
 
 // Helper function to extract numeric ID from building ID
