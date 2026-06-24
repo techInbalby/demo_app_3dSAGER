@@ -130,35 +130,6 @@ def calculate_features(file_path):
     }
 
 
-@celery.task(name='tasks.load_bkafi_results')
-def load_bkafi_results():
-    if not DEMO_RESULTS_JSON.exists():
-        raise FileNotFoundError(f'BKAFI results file not found at {DEMO_RESULTS_JSON}')
-
-    with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
-        results_dict = json.load(f)
-
-    flattened_cache = {}
-    total_pairs = 0
-    unique_candidates = 0
-
-    for file_name, file_buildings in results_dict.items():
-        for building_id, building_data in file_buildings.items():
-            flattened_cache[building_id] = building_data
-            unique_candidates += 1
-            total_pairs += len(building_data.get('possible_matches', []))
-
-    _cache_set_json('bkafi:flat', flattened_cache)
-    _cache_set_json('bkafi:by_file', results_dict)
-
-    return {
-        'cache_key_flat': 'bkafi:flat',
-        'cache_key_by_file': 'bkafi:by_file',
-        'total_pairs': int(total_pairs),
-        'unique_candidates': int(unique_candidates)
-    }
-
-
 # ---------------------------------------------------------------------------- #
 # Online inference pipeline — Step 1–4 driver                                  #
 # ---------------------------------------------------------------------------- #

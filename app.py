@@ -14,7 +14,6 @@ import hashlib
 import redis
 
 from tasks import celery as celery_app
-from tasks import load_bkafi_results as load_bkafi_task
 
 from pipeline import pipeline_bp
 # Note: the demo's blueprint package is named align_api/ (not alignment/) to
@@ -137,19 +136,6 @@ def get_job_status(task_id):
     if result.successful():
         payload['result'] = result.result
     return jsonify(payload)
-
-
-@app.route('/api/features/result', methods=['GET'])
-def get_features_result():
-    file_path = request.args.get('file_path', '')
-    if not file_path:
-        return jsonify({'error': 'No file path provided'}), 400
-    cached = cache_get_json(f'features:{file_path}')
-    if cached is None:
-        return jsonify({'error': 'Features not found in cache'}), 404
-    return jsonify({'file_path': file_path, 'features': cached})
-
-
 
 
 @app.route('/health')

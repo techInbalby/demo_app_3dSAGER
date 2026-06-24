@@ -1,118 +1,26 @@
 """
-Flask routes for the legacy BKAFI surface.
+Flask routes for per-building BKAFI lookups.
 
-Endpoints:
+Endpoints (registered under /api):
 
-    POST /api/bkafi/load                  — bridge demo_detailed_results JSON → Redis cache
-    GET  /api/bkafi/result                — DEPRECATED: return the bridged cache as a JSON blob
     GET  /api/building/bkafi/<id>         — per-cand list of blocking pairs (with confidence/label)
     GET  /api/building/matches/<id>       — per-cand list of matches (filter: predicted_label = 1)
 
-The Step 2 button in the demo's UI calls `/api/pipeline/start?stage=blocking`
-on the new pipeline. /api/bkafi/load is kept for compatibility with older
-client code paths and explicit re-bridge requests.
-
-The bkafi blueprint mounts at /api (not /api/bkafi) because two of its
-routes are under /api/building, not /api/bkafi.
+The Step 2 button in the demo's UI runs the new pipeline via
+`/api/pipeline/start?stage=blocking`. The legacy `/api/bkafi/load` +
+`/api/bkafi/result` endpoints that used to live here were deleted in
+refactor 1.9 — no client code referenced them.
 """
-import json
 import traceback
 
 from flask import Blueprint, jsonify, request
 
-from lib.cache import (
-    cache_get_json,
-    cache_set_json,
-    get_bkafi_by_file_cache,
-    get_bkafi_cache,
-    get_redis_client,
-    invalidate_buildings_status_cache,
-    set_bkafi_by_file_cache,
-    set_bkafi_cache,
-)
-from lib.config import CONFIDENCE_THRESHOLD, DEMO_RESULTS_JSON
+from lib.config import CONFIDENCE_THRESHOLD
 from lib.id_utils import extract_numeric_id
-from tasks import load_bkafi_results as load_bkafi_task
 
 from .lookups import ensure_bkafi_cache_loaded, find_building_in_bkafi
 
 bkafi_api_bp = Blueprint('bkafi_api', __name__)
-
-
-# ---------------------------------------------------------------------------
-# POST /api/bkafi/load
-# ---------------------------------------------------------------------------
-
-@bkafi_api_bp.route('/bkafi/load', methods=['POST'])
-def load_bkafi_results():
-    """Bridge `demo_detailed_results_XGBClassifier_seed1.json` into Redis
-    (or enqueue the Celery task that does the same). Hits a fast-path when
-    the cache is already warm."""
-    try:
-        cached_bkafi = get_bkafi_cache()
-        cached_by_file = get_bkafi_by_file_cache()
-        if cached_bkafi is not None and cached_by_file is not None:
-            return jsonify({
-                'success': True,
-                'message': 'BKAFI results already cached',
-                'total_pairs': sum(len(v.get('possible_matches', [])) for v in cached_bkafi.values()),
-                'unique_candidates': len(cached_bkafi),
-            })
-
-        if get_redis_client():
-            job = load_bkafi_task.delay()
-            return jsonify({
-                'job_id': job.id,
-                'status': 'queued',
-                'message': 'BKAFI load queued',
-            }), 202
-
-        if not DEMO_RESULTS_JSON.exists():
-            return jsonify({'error': f'BKAFI results file not found at {DEMO_RESULTS_JSON}'}), 404
-
-        with open(DEMO_RESULTS_JSON, 'r', encoding='utf-8') as f:
-            results_dict = json.load(f)
-
-        flattened_cache: dict = {}
-        unique_candidates = 0
-        total_pairs = 0
-        for _file_name, file_buildings in results_dict.items():
-            for building_id, building_data in file_buildings.items():
-                flattened_cache[building_id] = building_data
-                unique_candidates += 1
-                total_pairs += len(building_data.get('possible_matches', []))
-
-        set_bkafi_cache(flattened_cache)
-        set_bkafi_by_file_cache(results_dict)
-        cache_set_json('bkafi:flat', flattened_cache)
-        cache_set_json('bkafi:by_file', results_dict)
-        invalidate_buildings_status_cache()
-
-        return jsonify({
-            'success': True,
-            'message': f'BKAFI results loaded: {total_pairs} pairs for {unique_candidates} candidate buildings',
-            'total_pairs': int(total_pairs),
-            'unique_candidates': int(unique_candidates),
-        })
-
-    except json.JSONDecodeError as e:
-        print(f"Error parsing JSON: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': f'Invalid JSON format: {str(e)}'}), 500
-    except Exception as e:
-        print(f"Error loading BKAFI results: {e}\n{traceback.format_exc()}")
-        return jsonify({'error': str(e)}), 500
-
-
-# ---------------------------------------------------------------------------
-# GET /api/bkafi/result   (DEPRECATED; deletion scheduled in refactor 1.9)
-# ---------------------------------------------------------------------------
-
-@bkafi_api_bp.route('/bkafi/result', methods=['GET'])
-def get_bkafi_result():
-    cached = cache_get_json('bkafi:flat')
-    if cached is None:
-        return jsonify({'error': 'BKAFI results not found in cache'}), 404
-    return jsonify({'bkafi': cached})
 
 
 # ---------------------------------------------------------------------------
