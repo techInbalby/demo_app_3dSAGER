@@ -49,38 +49,20 @@ from lib.config import (
     ensure_directories_exist,
 )
 
-_redis_client = None
-
-
-def get_redis_client():
-    global _redis_client
-    if _redis_client is not None:
-        return _redis_client
-    try:
-        client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        client.ping()
-        _redis_client = client
-        return _redis_client
-    except Exception:
-        return None
-
-
-def cache_get_json(key):
-    client = get_redis_client()
-    if not client:
-        return None
-    raw = client.get(key)
-    if not raw:
-        return None
-    return json.loads(raw)
-
-
-def cache_set_json(key, payload, ttl=CACHE_TTL_SECONDS):
-    client = get_redis_client()
-    if not client:
-        return False
-    client.set(key, json.dumps(payload), ex=ttl)
-    return True
+# Redis client + JSON cache helpers + in-memory cache mirrors live in lib.cache.
+# Imported at module top-level so existing route code (`cache_get_json(...)`,
+# `features_cache[fp] = ...`) keeps working unchanged.
+from lib.cache import (
+    get_redis_client,
+    cache_get_json,
+    cache_set_json,
+    features_cache,
+    get_features_cache,
+    get_bkafi_cache,
+    set_bkafi_cache,
+    get_bkafi_by_file_cache,
+    set_bkafi_by_file_cache,
+)
 
 
 def build_features_from_parquet(parquet_path: Path):
@@ -93,38 +75,6 @@ def build_features_from_parquet(parquet_path: Path):
         building_features.setdefault(building_id, {})[feature_name] = value
     return building_features
 
-
-def get_features_cache(file_path):
-    # Prefer in-process memory to avoid a Redis round-trip + json.loads on every call
-    if file_path in features_cache:
-        return features_cache[file_path]
-    cached = cache_get_json(f'features:{file_path}')
-    if cached is not None:
-        features_cache[file_path] = cached  # warm the in-process cache
-        return cached
-    return None
-
-
-def get_bkafi_cache():
-    # Prefer in-process memory to avoid a Redis round-trip + json.loads on every call
-    global bkafi_cache
-    if bkafi_cache is not None:
-        return bkafi_cache
-    cached = cache_get_json('bkafi:flat')
-    if cached is not None:
-        bkafi_cache = cached  # warm the in-process cache
-        return cached
-    return None
-
-
-def get_bkafi_by_file_cache():
-    if hasattr(app, 'bkafi_cache_by_file') and app.bkafi_cache_by_file is not None:
-        return app.bkafi_cache_by_file
-    cached = cache_get_json('bkafi:by_file')
-    if cached is not None:
-        app.bkafi_cache_by_file = cached  # warm the in-process cache
-        return cached
-    return None
 
 ensure_directories_exist()
 
@@ -368,10 +318,9 @@ def get_file_by_query():
     return get_file(file_path)
 
 
-# Global cache for loaded features
-features_cache = {}
-# Global cache for BKAFI results
-bkafi_cache = None
+# Note: features_cache + bkafi_cache + bkafi_by_file_cache live in lib.cache
+# now (imported at the top of this file). The mutations below still write
+# to the shared dict / via setters, so existing call sites stay unchanged.
 
 
 def invalidate_buildings_status_cache(file_path: str = None):
@@ -742,13 +691,9 @@ def load_bkafi_results():
     Path: results_demo/demo_inference/demo_detailed_results_XGBClassifier_seed1.json
     """
     try:
-        global bkafi_cache
-
         cached_bkafi = get_bkafi_cache()
         cached_by_file = get_bkafi_by_file_cache()
         if cached_bkafi is not None and cached_by_file is not None:
-            bkafi_cache = cached_bkafi
-            app.bkafi_cache_by_file = cached_by_file
             return jsonify({
                 'success': True,
                 'message': 'BKAFI results already cached',
@@ -788,10 +733,9 @@ def load_bkafi_results():
         print(f"Number of candidate buildings: {unique_candidates} across {len(results_dict)} files")
         
         # Store in global cache (flattened dictionary structure for backward compatibility)
-        bkafi_cache = flattened_cache
+        set_bkafi_cache(flattened_cache)
         # Also store the original file-based structure for file-specific lookups
-        if not hasattr(app, 'bkafi_cache_by_file'):
-            app.bkafi_cache_by_file = results_dict
+        set_bkafi_by_file_cache(results_dict)
 
         cache_set_json('bkafi:flat', flattened_cache)
         cache_set_json('bkafi:by_file', results_dict)
