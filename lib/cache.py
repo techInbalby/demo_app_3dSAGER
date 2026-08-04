@@ -74,15 +74,11 @@ def cache_set_json(key: str, payload, ttl: int = CACHE_TTL_SECONDS) -> bool:
 # In-memory mirror of Redis keys (read-through cache)
 # ---------------------------------------------------------------------------
 
-# Public mutable dict: callers can do `features_cache[fp] = ...` directly.
-# The lib.cache module and app.py blueprints share the same dict reference.
+# `features_cache` is kept as a public mutable dict for the legacy
+# /api/features/calculate path (single-process workflow — the dict is
+# only written from the same web process that reads it). Once that path
+# is deleted, this can go too.
 features_cache: dict = {}              # {file_path: {building_id: {feature: value}}}
-
-# Reassignable globals (None → dict). Accessed exclusively through the
-# getter/setter pair below so callers in other modules see updates without
-# needing `global` declarations everywhere.
-_bkafi_cache: Optional[dict] = None
-_bkafi_by_file_cache: Optional[dict] = None
 
 
 def get_features_cache(file_path: str) -> Optional[dict]:
@@ -98,40 +94,35 @@ def get_features_cache(file_path: str) -> Optional[dict]:
     return None
 
 
+# bkafi is written by the Celery WORKER process (via _bridge_to_legacy after
+# each stage) and read by the WEB process. An in-memory mirror on the web
+# side would go stale the moment the worker writes new data to Redis — the
+# Step 2 → Step 3 transition is the canonical trigger (Step 2 writes
+# stub predicted_label=0 pairs, Step 3 writes real classifier scores).
+# Every request reads from Redis fresh. Sub-ms cost; correctness > caching.
+
+
 def get_bkafi_cache() -> Optional[dict]:
-    """Return the bkafi:flat dict, in-memory if warm, otherwise from Redis."""
-    global _bkafi_cache
-    if _bkafi_cache is not None:
-        return _bkafi_cache
-    cached = cache_get_json('bkafi:flat')
-    if cached is not None:
-        _bkafi_cache = cached
-        return cached
-    return None
+    """Return the bkafi:flat dict, always fresh from Redis."""
+    return cache_get_json('bkafi:flat')
 
 
 def set_bkafi_cache(payload: Optional[dict]) -> None:
-    """Replace the in-memory bkafi:flat mirror. Pass `None` to clear."""
-    global _bkafi_cache
-    _bkafi_cache = payload
+    """No-op shim. The in-memory bkafi cache was removed (it served stale
+    Step 2 stubs after Step 3 wrote real scores to Redis). Callers in the
+    worker still wrap their cache_set_json('bkafi:flat', ...) write with
+    this, which is now redundant but harmless."""
+    return
 
 
 def get_bkafi_by_file_cache() -> Optional[dict]:
-    """Per-file BKAFI mirror used by some legacy routes (bkafi:by_file)."""
-    global _bkafi_by_file_cache
-    if _bkafi_by_file_cache is not None:
-        return _bkafi_by_file_cache
-    cached = cache_get_json('bkafi:by_file')
-    if cached is not None:
-        _bkafi_by_file_cache = cached
-        return cached
-    return None
+    """Return the bkafi:by_file dict, always fresh from Redis."""
+    return cache_get_json('bkafi:by_file')
 
 
 def set_bkafi_by_file_cache(payload: Optional[dict]) -> None:
-    """Replace the in-memory bkafi:by_file mirror. Pass `None` to clear."""
-    global _bkafi_by_file_cache
-    _bkafi_by_file_cache = payload
+    """No-op shim — see set_bkafi_cache."""
+    return
 
 
 def invalidate_buildings_status_cache(file_path: Optional[str] = None) -> None:
